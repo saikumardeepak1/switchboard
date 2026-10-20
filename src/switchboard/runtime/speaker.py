@@ -54,10 +54,15 @@ class _Utterance:
     paused_at: float | None = None
     resumed: asyncio.Event = field(default_factory=asyncio.Event)
     unverified: list[asyncio.Task[GateDecision]] = field(default_factory=list)
+    providers: list[str] = field(default_factory=list)
+
+    @property
+    def provider(self) -> str | None:
+        return "+".join(self.providers) or None
 
 
-# Called with (utterance_id, text_played, interrupted); appends speech.played.
-PlayedCallback = Callable[[str, str, bool], Awaitable[None]]
+# Called with (utterance_id, text_played, interrupted, tts_provider); appends speech.played.
+PlayedCallback = Callable[[str, str, bool, str | None], Awaitable[None]]
 # Called with (utterance_id, sentence); records a correction sentence as released speech.
 CorrectionCallback = Callable[[str, str], Awaitable[None]]
 
@@ -154,7 +159,7 @@ class Speaker:
         await self._io.sink.clear()
         for task in u.unverified:
             task.cancel()
-        await self._on_played(u.utterance_id, text, True)
+        await self._on_played(u.utterance_id, text, True, u.provider)
         self._idle.set()
         self.start()
         await self._on_barge_in()
@@ -207,6 +212,8 @@ class Speaker:
             now = self._clock.now()
             u.audio_end = max(now, u.audio_end) + chunk.duration_s
             u.cursor.enqueue(chunk.text, chunk.duration_s, now)
+            if chunk.provider is not None and chunk.provider not in u.providers:
+                u.providers.append(chunk.provider)
             await self._io.sink.send(chunk)
 
     async def _finish(self, u: _Utterance) -> None:
@@ -225,4 +232,5 @@ class Speaker:
                 break
             await self._clock.sleep(remaining)
         self._utterance = None
-        await self._on_played(u.utterance_id, u.cursor.advance(self._clock.now()), False)
+        played = u.cursor.advance(self._clock.now())
+        await self._on_played(u.utterance_id, played, False, u.provider)

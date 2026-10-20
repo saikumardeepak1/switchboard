@@ -45,6 +45,8 @@ class AudioChunk:
     pcm: bytes
     duration_s: float
     text: str
+    # Which provider synthesized it, when a fallback chain is in front (ADR-013).
+    provider: str | None = None
 
 
 @runtime_checkable

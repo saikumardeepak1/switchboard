@@ -127,6 +127,9 @@ class SpeechPlayed(Event):
     utterance_id: str
     text_played: str
     interrupted: bool
+    # The TTS provider that served the utterance, "+"-joined if it changed between sentences.
+    # None when the TTS in use does not report one.
+    tts_provider: str | None = None
 
 
 class ProcedureAdvanced(Event):

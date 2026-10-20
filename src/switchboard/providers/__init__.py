@@ -1,5 +1,6 @@
 """STT, TTS and transport interfaces, simulated providers, and the Twilio codec."""
 
+from switchboard.providers.fallback import FallbackTTS, TtsAttempt, TtsServeRecord
 from switchboard.providers.interfaces import (
     STT,
     TTS,
@@ -25,6 +26,7 @@ __all__ = [
     "TTS",
     "AudioChunk",
     "AudioFrame",
+    "FallbackTTS",
     "LatencyModel",
     "SimulatedSTT",
     "SimulatedTTS",
@@ -33,5 +35,7 @@ __all__ = [
     "SttPartial",
     "SttVad",
     "Transport",
+    "TtsAttempt",
+    "TtsServeRecord",
     "inject_word_errors",
 ]

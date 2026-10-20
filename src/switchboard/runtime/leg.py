@@ -344,13 +344,16 @@ class Leg:
         except Exception as exc:
             self.conversation.record_failure(exc)
 
-    async def _played(self, utterance_id: str, text: str, interrupted: bool) -> None:
+    async def _played(
+        self, utterance_id: str, text: str, interrupted: bool, tts_provider: str | None
+    ) -> None:
         await self.conversation.emit(
             SpeechPlayed,
             leg_id=self.leg_id,
             utterance_id=utterance_id,
             text_played=text,
             interrupted=interrupted,
+            tts_provider=tts_provider,
         )
 
     async def _correction(self, utterance_id: str, sentence: str) -> None:

@@ -117,7 +117,7 @@ Event catalog (type string, payload fields):
 | `tool.executed` | call_id, tool, result, idempotency_key, replayed (bool) |
 | `tool.compensated` | call_id, compensation_tool, result |
 | `speech.sentence_gated` | utterance_id, sentence, decision (`release`/`block`/`escalate`), tier, claims |
-| `speech.played` | utterance_id, text_played, interrupted (bool) |
+| `speech.played` | utterance_id, text_played, interrupted (bool), tts_provider |
 | `procedure.advanced` | step, state |
 | `child.result` | child_leg_id, result |
 | `knowledge.retrieved` | fact_ids, as_of, texts (empty with content capture off) |
