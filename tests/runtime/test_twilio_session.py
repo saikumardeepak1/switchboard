@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from starlette.testclient import WebSocketTestSession
 from starlette.websockets import WebSocketDisconnect
 
-from switchboard.api import create_app
+from switchboard.api import StreamAuth, StreamTokenSigner, create_app
 from switchboard.brain import ScriptedLLM
 from switchboard.bundle import load_bundle
 from switchboard.core import InMemoryEventStore, RealClock
@@ -33,6 +33,7 @@ from switchboard.runtime.twilio_session import TwilioSessionFactory
 from .harness import EXAMPLE, LONG_GREETING, DeliveryBrain, RecordingTTS
 
 STREAM = "MZ900"
+AUTH = StreamAuth(StreamTokenSigner(b"twilio-session-test-secret"))
 
 
 class AudioTextSTT:
@@ -88,7 +89,9 @@ def start(ws: WebSocketTestSession) -> None:
                 "callSid": "CA77",
                 "streamSid": STREAM,
                 "tracks": ["inbound"],
-                "customParameters": {"tenant": "dashfleet", "customer": "C-77", "party": "courier"},
+                "customParameters": {
+                    "token": AUTH.signer.issue(tenant="dashfleet", customer="C-77", party="courier")
+                },
                 "mediaFormat": {"encoding": "audio/x-mulaw", "sampleRate": 8000, "channels": 1},
             },
         },
@@ -112,7 +115,7 @@ def test_a_call_over_the_media_stream_speaks_barges_in_and_ends() -> None:
     factory = TwilioSessionFactory(
         runtime, load_bundle(EXAMPLE), stt=new_stt, tts=lambda call_sid: tts
     )
-    app = create_app(store, session_factory=factory)
+    app = create_app(store, session_factory=factory, stream_auth=AUTH)
     seen: list[dict[str, Any]] = []
 
     def read_until(done: Any) -> None:

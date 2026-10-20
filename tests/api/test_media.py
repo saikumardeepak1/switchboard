@@ -12,13 +12,15 @@ from typing import Any
 from fastapi.testclient import TestClient
 from starlette.testclient import WebSocketTestSession
 
-from switchboard.api import create_app
+from switchboard.api import StreamAuth, StreamTokenSigner, create_app
 from switchboard.api.media import Clear, OutboundAudio, Utterance
 from switchboard.core.store import InMemoryEventStore
 from switchboard.providers.twilio import FRAME_BYTES, decode_ulaw, encode_ulaw
 from switchboard.telemetry.metrics import Registry
 
 STREAM = "MZ123"
+AUTH = StreamAuth(StreamTokenSigner(b"media-test-stream-secret"))
+TOKEN = AUTH.signer.issue(tenant="acme", customer="cust_1")
 
 
 def pcm(samples: list[int]) -> bytes:
@@ -83,7 +85,7 @@ def start_msg() -> dict[str, Any]:
             "callSid": "CA1",
             "streamSid": STREAM,
             "tracks": ["inbound"],
-            "customParameters": {"tenant": "acme"},
+            "customParameters": {"token": TOKEN},
             "mediaFormat": {"encoding": "audio/x-mulaw", "sampleRate": 8000, "channels": 1},
         },
     }
@@ -108,7 +110,9 @@ def test_full_media_stream_round_trip() -> None:
     reply = pcm([(i * 37) % 2000 - 1000 for i in range(400)])
     factory = FakeFactory(reply)
     registry = Registry()
-    app = create_app(InMemoryEventStore(), session_factory=factory, registry=registry)
+    app = create_app(
+        InMemoryEventStore(), session_factory=factory, registry=registry, stream_auth=AUTH
+    )
     inbound = pcm([0, 1000, -1000, 32000, -32000] * 32)
     inbound_ulaw = encode_ulaw(inbound)
 
@@ -157,7 +161,9 @@ def test_full_media_stream_round_trip() -> None:
             },
         )
 
-    assert factory.starts == [("CA1", STREAM, {"tenant": "acme"})]
+    assert factory.starts == [
+        ("CA1", STREAM, {"tenant": "acme", "customer": "cust_1", "party": "caller"})
+    ]
     (session,) = factory.sessions
     assert session.audio == [decode_ulaw(inbound_ulaw)]
     assert session.marks == ["utt_1"]
@@ -170,7 +176,7 @@ def test_full_media_stream_round_trip() -> None:
 
 def test_client_disconnect_closes_session() -> None:
     factory = FakeFactory(b"")
-    app = create_app(InMemoryEventStore(), session_factory=factory)
+    app = create_app(InMemoryEventStore(), session_factory=factory, stream_auth=AUTH)
     with TestClient(app) as client, client.websocket_connect("/v1/twilio/media") as ws:
         send(ws, start_msg())
         send(ws, media_msg(2, b"\xff" * 160))
@@ -181,7 +187,9 @@ def test_client_disconnect_closes_session() -> None:
 def test_media_before_start_and_malformed_messages_are_ignored() -> None:
     factory = FakeFactory(b"")
     registry = Registry()
-    app = create_app(InMemoryEventStore(), session_factory=factory, registry=registry)
+    app = create_app(
+        InMemoryEventStore(), session_factory=factory, registry=registry, stream_auth=AUTH
+    )
     with TestClient(app) as client, client.websocket_connect("/v1/twilio/media") as ws:
         send(ws, media_msg(1, b"\xff" * 160))
         ws.send_text("{not json")

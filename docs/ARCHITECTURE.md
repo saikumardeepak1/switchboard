@@ -266,6 +266,11 @@ k)` computes pass^k.
 
 ### telemetry and api
 
+The Twilio media endpoint trusts no caller-supplied identity: `api.stream_auth` verifies a
+server-signed stream token (HMAC-SHA256, passed as the `token` stream parameter) and takes tenant,
+customer and party from it alone, closing the socket with 1008 otherwise. An `X-Twilio-Signature`
+check on the upgrade is optional on top.
+
 `ActivityStream` is a projection over the event store with filters (conversation, leg, type, time
 range) and frequency buckets for charts. The API serves it at `GET /v1/activity` and
 `GET /v1/activity/histogram`.

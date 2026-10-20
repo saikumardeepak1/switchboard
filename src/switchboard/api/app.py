@@ -26,6 +26,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from switchboard.api.media import MediaStreamHandler, SessionFactory
 from switchboard.api.page import ACTIVITY_HTML
+from switchboard.api.stream_auth import StreamAuth
 from switchboard.core.store import EventStore
 from switchboard.telemetry.activity import (
     MAX_LIMIT,
@@ -68,12 +69,18 @@ def create_app(
     epoch_offset_s: float | None = None,
     service_name: str = "switchboard",
     capture_content: bool = False,
+    stream_auth: StreamAuth | None = None,
 ) -> FastAPI:
     """Build the app.
+
+    A `session_factory` needs `stream_auth`: the media endpoint takes tenant and customer only
+    from a server-signed stream token, and refuses a stream without one (see `stream_auth`).
 
     `epoch_offset_s` maps clock seconds (event `at`) onto Unix time. With it, activity items get
     an ISO `wall_time` and traces get real timestamps; without it, traces start at the epoch.
     """
+    if session_factory is not None and stream_auth is None:
+        raise ValueError("a Twilio session_factory needs stream_auth to authenticate streams")
     app = FastAPI(title="Switchboard", version="0.1.0")
     stream = ActivityStream(store)
     metrics = registry if registry is not None else Registry()
@@ -177,9 +184,9 @@ def create_app(
             timeline.spans(), service_name=service_name, epoch_offset_s=epoch_offset_s or 0.0
         )
 
-    if session_factory is not None:
+    if session_factory is not None and stream_auth is not None:
         app.add_api_websocket_route(
-            "/v1/twilio/media", MediaStreamHandler(session_factory, metrics)
+            "/v1/twilio/media", MediaStreamHandler(session_factory, metrics, stream_auth)
         )
     else:
         # Register the gauges anyway so dashboards see zeros instead of missing series.
