@@ -7,11 +7,17 @@ and that call belongs to this layer, not to the model: a model that re-proposes 
 open a second refund by itself.
 
 `RequestDetector` decides it deterministically from the committed turn text. Each write tool has
-cue sets; a turn requests the tool when every word of one cue set appears in it (after a crude
+cue sets; a clause names the tool when every word of one cue set appears in it (after a crude
 suffix strip, so "refunded" meets "refund"). By default the cue set is the words of the tool name
 minus generic verbs: `mark_delivered` needs "mark" and "deliver", `issue_refund` needs "refund".
-A status question ("did the refund go through?", "is it marked?") is not a request. A bundle
-can name its own cues per tool.
+A bundle can name its own cues per tool.
+
+Naming the tool is not enough: the clause must also ask for it. After leading fillers ("okay",
+"great", "so") a clause asks when it opens with a request cue ("please", "can you", "I need",
+"I want", "I'd like", "go ahead and", "I can't" for a stuck action) or with an imperative verb
+("mark it delivered", "refund them"). Thanks, statements about what already happened ("the refund
+came through", "so it's marked delivered"), status questions and negations ("don't refund it")
+ask for nothing. A clause of politeness alone ("yes, please, refund it") carries over to the next.
 """
 
 from __future__ import annotations
@@ -25,12 +31,36 @@ __all__ = ["RequestDetector"]
 _GENERIC: Final = frozenset(
     {"get", "issue", "lookup", "look", "do", "run", "make", "perform", "execute", "create"}
 )
-_STATUS_OPENERS: Final = frozenset(
-    {"did", "is", "was", "has", "have", "had", "does", "are", "were", "any"}
-)
-_MODAL_OPENERS: Final = frozenset({"will", "would", "can", "could"})
 _WORD = re.compile(r"[a-z']+")
-_CLAUSE = re.compile(r"[^,.;!?]*\?")
+_CLAUSE = re.compile(r"[,.;!?]+|\b(?:and|but|then)\b")
+_FILLERS: Final = frozenset(
+    {
+        "okay", "ok", "alright", "great", "cool", "perfect", "good", "nice", "awesome", "so",
+        "now", "yes", "yeah", "yep", "sure", "well", "oh", "um", "uh", "hi", "hey", "hello",
+        "also", "just", "right", "fine", "mm", "hm", "too",
+    }
+)  # fmt: skip
+_POLITE: Final = frozenset({"please", "kindly"})
+# Request openers, as word sequences matched at the start of a clause (after fillers).
+_OPENERS: Final = tuple(
+    tuple(o.split())
+    for o in (
+        "can you", "could you", "would you", "will you", "can u", "would you please",
+        "i need", "we need", "i want", "we want", "i'd like", "i would like", "we'd like",
+        "go ahead and", "let's", "i need you to", "need you to", "help me",
+        "i can't", "i cannot", "i'm unable to", "i am unable to", "it won't let me",
+    )
+)  # fmt: skip
+# Verbs a clause may open with as an imperative, beyond the tool's own cue words.
+_IMPERATIVES: Final = frozenset(
+    {
+        "issue", "make", "do", "get", "give", "send", "process", "change", "update", "set",
+        "put", "cancel", "mark", "refund", "add", "remove", "apply", "credit", "reverse",
+    }
+)  # fmt: skip
+_NEGATIONS: Final = frozenset({"don't", "dont", "not", "never", "no", "do"})
+# After "I need to" or "I want to", these ask about the action rather than for it.
+_INQUIRIES: Final = frozenset({"know", "check", "see", "ask", "understand", "find", "hear"})
 
 
 def _stem(word: str) -> str:
@@ -45,16 +75,35 @@ def _default_cues(tool: str) -> tuple[frozenset[str], ...]:
     return (frozenset(_stem(w) for w in words),) if words else ()
 
 
-def _status_question(text: str) -> bool:
-    for clause in _CLAUSE.findall(text.lower()):
-        words = _WORD.findall(clause)
-        if not words:
-            continue
-        if words[0] in _STATUS_OPENERS:
-            return True
-        if words[0] in _MODAL_OPENERS and (len(words) < 2 or words[1] != "you"):
-            return True
-    return False
+def _clauses(text: str) -> list[list[str]]:
+    return [_WORD.findall(part) for part in _CLAUSE.split(text.lower())]
+
+
+def _strip(words: list[str], drop: frozenset[str]) -> list[str]:
+    i = 0
+    while i < len(words) and words[i] in drop:
+        i += 1
+    return words[i:]
+
+
+def _asks(words: list[str], carried: bool) -> bool:
+    """The clause, fillers already stripped, opens with a request and is not negated."""
+    rest: list[str] | None = None
+    if words and words[0] in _POLITE:
+        rest = _strip(words, _POLITE | _FILLERS)
+    else:
+        for opener in sorted(_OPENERS, key=len, reverse=True):
+            if tuple(words[: len(opener)]) == opener:
+                rest = _strip(words[len(opener) :], _POLITE | _FILLERS)
+                break
+    if rest is None:
+        if not carried:
+            # An imperative in base form only: "refunded" reports, it does not order.
+            return bool(words) and words[0] in _IMPERATIVES
+        rest = words
+    if rest and rest[0] in _NEGATIONS:
+        return False
+    return not (len(rest) >= 2 and rest[0] == "to" and rest[1] in _INQUIRIES)
 
 
 class RequestDetector:
@@ -69,11 +118,22 @@ class RequestDetector:
 
     def requested(self, text: str, tools: Iterable[str]) -> list[str]:
         """The tools, sorted, that this user turn newly asks for."""
-        if _status_question(text):
-            return []
-        stems = {_stem(w) for w in _WORD.findall(text.lower())}
-        return sorted(
-            tool
-            for tool in set(tools)
-            if any(group and group <= stems for group in self.cues(tool))
-        )
+        wanted = set(tools)
+        found: set[str] = set()
+        carried = False
+        for clause in _clauses(text):
+            words = _strip(clause, _FILLERS)
+            if not words:
+                continue
+            if all(w in _POLITE | _FILLERS for w in words):
+                carried = True
+                continue
+            if _asks(words, carried):
+                stems = {_stem(w) for w in words}
+                found.update(
+                    tool
+                    for tool in wanted
+                    if any(group and group <= stems for group in self.cues(tool))
+                )
+            carried = False
+        return sorted(found)

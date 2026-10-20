@@ -104,11 +104,18 @@ def test_child_result_merges_its_evidence_patch() -> None:
         LegOpened(
             **BASE, leg_id="leg_b", role="outbound_child", party="customer", parent_leg_id="leg_a"
         ),
+        TurnCommitted(**BASE, leg_id="leg_b", turn_id="t1", text="Yes.", endpointing_ms=1),
         ChildResult(
             **BASE,
             leg_id="leg_a",
             child_leg_id="leg_b",
-            result={"confirmed": True, "evidence": {"customer_confirmed_address": True}},
+            result={
+                "confirmed": True,
+                "evidence": {"customer_confirmed_address": True},
+                "provenance": {
+                    "customer_confirmed_address": {"child_leg_id": "leg_b", "turn_event_id": "e4"}
+                },
+            },
         ),
     )
     state = replay(events)

@@ -26,10 +26,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from switchboard.brain import (
     BrainRequest,
+    Done,
     Message,
     RouteDecision,
     RouteState,
@@ -138,6 +139,7 @@ class Leg:
             on_played=self._played,
             on_correction=self._correction,
             on_barge_in=self._barge_in,
+            on_error=conversation.record_failure,
         )
         self._turn_lock = asyncio.Lock()
         self._signal_lock = asyncio.Lock()
@@ -149,7 +151,10 @@ class Leg:
         self._over_utterance: str | None = None
         self._tasks: set[asyncio.Task[None]] = set()
         self._agent_turns: set[asyncio.Task[None]] = set()
+        # Tier 3 verdicts in flight; cancelled with the leg so none outlives it.
+        self._verdicts: set[asyncio.Task[GateDecision]] = set()
         self._ticker: asyncio.Task[None] | None = None
+        self._bridges = 0
         self.closed = False
 
     # lifecycle
@@ -163,7 +168,7 @@ class Leg:
         if self.closed:
             return
         self.closed = True
-        tasks = [*self._tasks, *self._agent_turns]
+        tasks: list[asyncio.Task[Any]] = [*self._tasks, *self._agent_turns, *self._verdicts]
         if self._ticker is not None:
             tasks.append(self._ticker)
         current = asyncio.current_task()
@@ -181,7 +186,13 @@ class Leg:
     def abandon(self) -> None:
         """Stop every task without writing anything, as a crashed process would."""
         self.closed = True
-        for task in [*self._tasks, *self._agent_turns, self._ticker]:
+        tasks: list[asyncio.Task[Any] | None] = [
+            *self._tasks,
+            *self._agent_turns,
+            *self._verdicts,
+            self._ticker,
+        ]
+        for task in tasks:
             if task is not None:
                 task.cancel()
 
@@ -295,7 +306,7 @@ class Leg:
                 turn_id=spec.turn_id,
                 text=signal.text,
                 endpointing_ms=waited_ms,
-                requests=self.conversation.requested_tools(signal.text),
+                requests=self._requests(signal.text),
             )
             spec.text = signal.text
             await self._engine.handle(signal)  # promotes: the token stops being speculative
@@ -312,11 +323,15 @@ class Leg:
             turn_id=turn_id,
             text=signal.text,
             endpointing_ms=waited_ms,
-            requests=self.conversation.requested_tools(signal.text),
+            requests=self._requests(signal.text),
         )
         ctx = TurnContext(turn_id, committed.event_id, signal.text)
         ctx.committed.set()
         await self._engine.handle(signal, ctx, turn_id=turn_id)
+
+    def _requests(self, text: str) -> list[str]:
+        # A child call's party answers the agent's questions; only the inbound caller asks.
+        return self.conversation.requested_tools(text) if self.role == "inbound" else []
 
     async def _cancel_speculation(self) -> None:
         spec, self._spec = self._spec, None
@@ -393,6 +408,8 @@ class Leg:
                 decision = conv.router.route(ctx.text, RouteState())
             else:
                 decision = RouteDecision("thinker", ctx.reason)
+            if conv.over_token_budget():
+                decision = RouteDecision("talker", "budget")
             await conv.emit(
                 BrainRouted,
                 leg_id=self.leg_id,
@@ -419,11 +436,22 @@ class Leg:
                 if "denied" in outcomes:
                     denials += 1
                     if denials > conv.bundle.config.max_policy_retries:
+                        await conv.abort_turn(ctx.turn_id)
                         async for spoken in self._handoff(ctx, f"{denials} policy denials"):
                             yield spoken
+                        await self._give_up_child(ctx)
                         return
+            await conv.abort_turn(ctx.turn_id)
             async for spoken in self._handoff(ctx, "model call budget exhausted"):
                 yield spoken
+            await self._give_up_child(ctx)
+
+    async def _give_up_child(self, ctx: TurnContext) -> None:
+        # A child call that cannot finish still owes its parent an answer: not confirmed.
+        if self.role == "outbound_child":
+            await self.conversation.report_child(
+                self, False, "The call could not be completed.", ctx.anchor_id
+            )
 
     async def _handoff(self, ctx: TurnContext, reason: str) -> AsyncIterator[Spoken]:
         await self.conversation.emit(
@@ -472,6 +500,8 @@ class Leg:
                 async for chunk in stream:
                     if isinstance(chunk, ToolCallChunk):
                         calls.append(chunk)
+                    elif isinstance(chunk, Done):
+                        self.conversation.spend_tokens(chunk.usage)
                     elif isinstance(chunk, TextDelta):
                         for sentence in splitter.feed(chunk.text):
                             spoken, blocked = await self._gate(ctx, utterance_id, sentence)
@@ -520,7 +550,19 @@ class Leg:
             return None, decision
 
         async def settle() -> GateDecision:
-            final = await conv.gate.resolve(decision, sentence, evidence)
+            try:
+                final = await conv.gate.resolve(decision, sentence, evidence)
+            except Exception as exc:
+                # Fail closed: an unanswered verification is a block, and the call goes on.
+                conv.record_failure(exc)
+                final = GateDecision(
+                    "block",
+                    3,
+                    decision.claims,
+                    decision.unsupported,
+                    f"verifier failed: {type(exc).__name__}",
+                    score=decision.score,
+                )
             await conv.emit(
                 SpeechSentenceGated,
                 leg_id=self.leg_id,
@@ -533,7 +575,10 @@ class Leg:
             )
             return final
 
-        return Spoken(sentence, utterance_id, verdict=asyncio.create_task(settle())), None
+        verdict = asyncio.create_task(settle(), name=f"verdict:{utterance_id}")
+        self._verdicts.add(verdict)
+        verdict.add_done_callback(self._verdicts.discard)
+        return Spoken(sentence, utterance_id, verdict=verdict), None
 
     async def _tool(self, ctx: TurnContext, call: ToolCallChunk, token: CancelToken) -> ToolOutcome:
         conv = self.conversation
@@ -545,7 +590,7 @@ class Leg:
             tool=call.name,
             args=dict(call.args),
         )
-        if call.name not in self.tool_effects:
+        if call.name not in self.tool_effects and call.name not in conv.bundle.compensation_tools:
             await conv.emit(
                 ToolExecuted,
                 leg_id=self.leg_id,
@@ -555,7 +600,7 @@ class Leg:
                 result={"error": f"tool {call.name!r} is not available on this call"},
             )
             return "ok"
-        if self.tool_effects[call.name] == "write" and token.speculative:
+        if self.tool_effects.get(call.name, "write") == "write" and token.speculative:
             await conv.emit(
                 PolicyVerdict,
                 leg_id=self.leg_id,
@@ -567,6 +612,8 @@ class Leg:
             )
             await ctx.committed.wait()  # cancelled along with the speculation
         verdict = conv.check(call, self.tool_effects)
+        if verdict.allowed and self.role == "outbound_child" and call.name == "report_result":
+            verdict = conv.check_child_report(self, call) or verdict
         await conv.emit(
             PolicyVerdict,
             leg_id=self.leg_id,
@@ -584,16 +631,56 @@ class Leg:
         if self.role == "outbound_child" and call.name == "report_result":
             await conv.finish_child(self, call, proposed.event_id)
             return "stop"
-        await conv.execute(
-            self.leg_id,
-            call.call_id,
-            call.name,
-            dict(call.args),
-            intent=conv.state.calls[call.call_id].intent,
-            speculative=token.speculative,
-            causation_id=proposed.event_id,
-        )
+        bridge = asyncio.create_task(self._bridge(ctx), name=f"bridge:{call.call_id}")
+        try:
+            await conv.execute(
+                self.leg_id,
+                call.call_id,
+                call.name,
+                dict(call.args),
+                intent=conv.state.calls[call.call_id].intent,
+                speculative=token.speculative,
+                causation_id=proposed.event_id,
+            )
+        finally:
+            bridge.cancel()
         return "ok"
+
+    async def _bridge(self, ctx: TurnContext) -> None:
+        """Fill the silence of a slow tool with a fixed phrase from the bundle (ADR-008).
+
+        It speaks once the caller has heard `bridge_after_ms` of silence on a committed turn,
+        and only a phrase the gate finds no claim in: bridge speech must never state a fact.
+        """
+        config = self.conversation.bundle.config
+        if not config.bridge_phrases:
+            return
+        await ctx.committed.wait()
+        while True:
+            await self.speaker.drain()
+            await self._clock.sleep(config.bridge_after_ms / 1000.0)
+            if not self.speaker.speaking:
+                break
+        if self.closed:
+            return
+        phrase = config.bridge_phrases[self._bridges % len(config.bridge_phrases)]
+        decision = self.conversation.gate.review(phrase, self.conversation.grounding_evidence())
+        if decision.claims or decision.decision == "block":
+            return
+        utterance_id = f"{ctx.turn_id}/bridge{self._bridges}"
+        self._bridges += 1
+        await self.conversation.emit(
+            SpeechSentenceGated,
+            leg_id=self.leg_id,
+            causation_id=ctx.anchor_id,
+            utterance_id=utterance_id,
+            sentence=phrase,
+            decision="release",
+            tier=decision.tier,
+            claims=[],
+        )
+        self.speaker.say(Spoken(phrase, utterance_id))
+        self.speaker.say(Spoken("", utterance_id, end=True))
 
 
 def _to_signals(event: SttEvent, in_speech: bool) -> tuple[list[InputSignal], bool]:

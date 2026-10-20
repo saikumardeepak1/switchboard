@@ -10,8 +10,9 @@ has queued but not played.
 Mark echoes are recorded on the session. The speaker's playback cursor still runs on the clock;
 marks say which chunks Twilio played, which is the hook for a cursor driven by the far end.
 
-`call_sid` names the STT and TTS streams; custom parameters on the stream (`<Parameter>` in
-TwiML) carry the tenant, the customer and the party name.
+`call_sid` names the STT and TTS streams. The tenant, customer and party arrive as parameters
+the media endpoint took from the verified stream token (`api.stream_auth`), never from the
+caller's own `customParameters`.
 """
 
 from __future__ import annotations

@@ -32,3 +32,4 @@ parties:
   customer:
     description: The customer who placed the order.
     confirms: customer_confirmed_address
+rollback_on: []

@@ -131,6 +131,11 @@ exempt from the grounding gate only if it contains no claims.
 **Evidence.** SALMONN-duo delegates 16% of easy and 61% of hard turns at equal accuracy;
 RouteLLM cut cost by more than 2x at 95% quality. The LLM is the largest variable cost per minute.
 
+**Implementation note (2026-10).** Bridge speech is a fixed phrase from `agent.yaml`
+`bridge_phrases`, not talker output: the leg speaks one once a running tool has left the caller
+`bridge_after_ms` (default 700) of silence on a committed turn. Each phrase goes through the gate
+and is dropped if it carries any claim.
+
 ## ADR-009: Side effects are idempotent activities with compensations in the spec
 
 **Decision.** A tool with side effects declares `effect: write`, an idempotency key derivation
@@ -147,11 +152,21 @@ crash replays of one proposal, but models re-propose writes in later turns ("tha
 marked now?"), and each re-proposal got a new step, a new key and a second downstream write. The
 key is now conversation id, tool, canonical identity arguments and an explicit intent counter
 per tool. The policy layer moves the counter only when a committed user turn makes a new request
-for that tool (`RequestDetector`, cue words per tool, status questions excluded), and records it
-on `turn.committed` so recovery derives the same key. A re-proposal in the same request replays
+for that tool (`RequestDetector`, cue words per tool plus a request cue or imperative at clause
+start; thanks, status questions and statements about what already happened are excluded), and
+records it on `turn.committed` so recovery derives the same key. Only the inbound caller's turns
+count; a child call's party answers questions and opens nothing. A proposal identical to a call
+that already ran replays it unless a request was opened after that call ran. A re-proposal in the same request replays
 from the ledger; a real second request ("refund another ten dollars") runs. The cost: a request
 the detector misses reuses the old key and replays instead of running, which fails safe for
 writes, and a bundle can name its own cue words when the tool name is a poor cue.
+
+**Wiring (2026-10).** Compensation targets are hidden from the model: `Bundle.tool_specs()`
+leaves them out, and the compiled policy denies any proposal of one with rule
+`runtime:compensation_only`. The runtime runs them through `Saga`: when a conversation ends with
+an outcome listed in `agent.yaml` `rollback_on` (default empty), and, if `turn_aborted` is listed,
+when it hands off a turn it gave up on, it compensates that scope's writes newest first and
+records `tool.compensated`.
 
 ## ADR-010: Knowledge is bitemporal; incidents expire on their own
 
@@ -191,6 +206,11 @@ fires on a deadline, not only on errors, ending in a human-handoff tier.
 **Evidence.** A call holds a slot for minutes with low token use, so token limits alone do not
 protect capacity. Slow providers cause dead air, the failure callers notice first (Vapi, Retell,
 Sierra all use deadline-triggered fallback).
+
+**Implementation note (2026-10).** The token budget is `tenant_limits.tokens_per_minute` in
+`agent.yaml` (or a per-tenant override on `AdmissionController`), counted from model usage over a
+sliding 60 second window on the clock. A tenant over budget keeps its calls; its turns are routed
+to the talker with `brain.routed` reason `budget` until usage slides out of the window.
 
 ## ADR-014: Everything runs on an injectable clock; evaluation is deterministic simulation
 

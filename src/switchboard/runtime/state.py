@@ -12,12 +12,15 @@ keeping its real effects (a read tool that ran still produced evidence).
 
 Evidence. Policy rules read `evidence.<key>`. Keys come only from an explicit `evidence` mapping
 inside a successful tool result or a child call result, so a tool decides which of its fields are
-policy facts and the model cannot write one.
+policy facts and the model cannot write one. A child result's key also needs `provenance`: the
+child leg and the event id of a turn the other party committed on that leg. A key without it, or
+citing a turn that is not that party's, is dropped, so a child cannot confirm what nobody said.
 
-Grounding inputs. The gate checks spoken claims against tool results, child results, retrieved
-knowledge text and memory read at setup. All four are in the log (`knowledge.retrieved` and
-`memory.loaded` carry their text when content capture is on), so `grounding_evidence()` on a
-replayed state is exactly what the live gate saw.
+Grounding inputs. The gate checks spoken claims against tool results, child results (minus the
+free-text `notes` the child's model wrote), retrieved knowledge text and memory read at setup.
+All four are in the log (`knowledge.retrieved` and `memory.loaded` carry their text when
+content capture is on), so `grounding_evidence()` on a replayed state is exactly what the
+live gate saw.
 
 Incremental by construction. The grounding evidence, the policy event index and the set of
 tools that have succeeded are updated here, once per event, and never rebuilt from the whole
@@ -59,6 +62,9 @@ from switchboard.policy.procedure import tool_succeeded
 
 # Verdicts with these rule ids are runtime refusals, not policy denials the model must repair.
 SPECULATION_RULE = "speculation:uncommitted_turn"
+
+# Child result fields the child's model wrote. Shown to the parent model, never evidence.
+_MODEL_AUTHORED = frozenset({"notes"})
 
 TurnStatus = Literal["speculating", "committed", "cancelled", "agent"]
 Role = Literal["system", "user", "assistant", "tool"]
@@ -102,6 +108,7 @@ class CallState:
     replayed: bool = False
     # The request this call serves (ADR-009); fixed when its turn commits.
     intent: int = 0
+    executed_seq: int | None = None
 
     @property
     def allowed(self) -> bool:
@@ -133,8 +140,10 @@ class ConversationState:
     history: dict[str, list[HistoryEntry]] = field(default_factory=dict)
     calls: dict[str, CallState] = field(default_factory=dict)
     evidence: dict[str, Any] = field(default_factory=dict)
-    # Requests the user has made per write tool, from `turn.committed`.
+    # Requests the user has made per write tool, from inbound `turn.committed` events.
     intents: dict[str, int] = field(default_factory=dict)
+    # Seq of the turn that last opened each tool's current intent.
+    intent_opened: dict[str, int] = field(default_factory=dict)
     tool_results: list[dict[str, Any]] = field(default_factory=list)
     completed_steps: list[str] = field(default_factory=list)
     child_results: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -148,6 +157,8 @@ class ConversationState:
     grounding: Evidence = field(default_factory=Evidence)
     index: EventIndex = field(default_factory=EventIndex)
     succeeded_tools: set[str] = field(default_factory=set)
+    # Event id of every committed user turn, to the leg it was spoken on.
+    turn_legs: dict[str, str] = field(default_factory=dict)
     handoffs: list[str] = field(default_factory=list)
     compensations: list[str] = field(default_factory=list)
     ended: bool = False
@@ -207,6 +218,21 @@ def _merge_evidence(state: ConversationState, result: Mapping[str, Any]) -> None
         state.evidence.update({str(k): v for k, v in patch.items()})
 
 
+def _merge_child_evidence(
+    state: ConversationState, child_leg_id: str, result: Mapping[str, Any]
+) -> None:
+    patch = result.get("evidence")
+    provenance = result.get("provenance")
+    if not isinstance(patch, Mapping) or not isinstance(provenance, Mapping):
+        return
+    for key, value in patch.items():
+        source = provenance.get(key)
+        if not isinstance(source, Mapping) or source.get("child_leg_id") != child_leg_id:
+            continue
+        if state.turn_legs.get(str(source.get("turn_event_id"))) == child_leg_id:
+            state.evidence[str(key)] = value
+
+
 def _history(state: ConversationState, leg_id: str | None) -> list[HistoryEntry]:
     return state.history.setdefault(leg_id or "", [])
 
@@ -223,6 +249,26 @@ def _utterance_entry(
     )
     entries.append(entry)
     return entry
+
+
+def _intent_for(state: ConversationState, tool: str, args: Mapping[str, Any]) -> int:
+    """The intent a proposal of `tool` with `args` serves (ADR-009).
+
+    Normally the tool's current counter. But when the same call already ran and no request was
+    opened after it ran, the proposal repeats that call: it takes the earlier call's intent, so
+    its key matches and the ledger replays it, even if the counter moved while it was in flight.
+    """
+    current = state.intents.get(tool, 0)
+    opened = state.intent_opened.get(tool, 0)
+    canonical = canonical_json(dict(args))
+    for prior in reversed(state.calls.values()):
+        if (
+            prior.tool == tool
+            and prior.executed_seq is not None
+            and canonical_json(prior.args) == canonical
+        ):
+            return prior.intent if opened < prior.executed_seq else current
+    return current
 
 
 def apply_event(state: ConversationState, event: AnyEvent) -> None:
@@ -266,8 +312,13 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
             if event.turn_id in state.turns:
                 state.turns[event.turn_id].status = "cancelled"
         case TurnCommitted():
-            for tool in event.requests:
-                state.intents[tool] = state.intents.get(tool, 0) + 1
+            state.turn_legs[event.event_id] = event.leg_id or ""
+            leg = state.legs.get(event.leg_id or "")
+            if leg is not None and leg.role == "inbound":
+                # Only the inbound party asks for actions; a child call's party answers questions.
+                for tool in event.requests:
+                    state.intents[tool] = state.intents.get(tool, 0) + 1
+                    state.intent_opened[tool] = event.seq
             turn = state.turns.get(event.turn_id)
             if turn is not None and turn.status == "speculating":
                 turn.status = "committed"
@@ -275,7 +326,7 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
                 # Calls proposed while speculating serve the request this commit opened.
                 for call_id in turn.call_ids:
                     waiting = state.calls[call_id]
-                    waiting.intent = state.intents.get(waiting.tool, 0)
+                    waiting.intent = _intent_for(state, waiting.tool, waiting.args)
                 for entry in _history(state, event.leg_id):
                     if entry.role == "user" and entry.turn_id == event.turn_id:
                         entry.content = event.text
@@ -302,7 +353,7 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
                 dict(event.args),
                 event.seq,
                 turn_id,
-                intent=state.intents.get(event.tool, 0),
+                intent=_intent_for(state, event.tool, event.args),
             )
             if turn_id is not None and turn_id in state.turns:
                 state.turns[turn_id].call_ids.append(event.call_id)
@@ -333,6 +384,7 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
             call = state.calls.get(event.call_id)
             if call is not None:
                 call.executed = True
+                call.executed_seq = event.seq
                 call.result = dict(event.result)
                 call.idempotency_key = event.idempotency_key
                 call.replayed = event.replayed
@@ -351,7 +403,8 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
                 )
             )
         case ToolCompensated():
-            state.compensations.append(event.call_id)
+            if tool_succeeded(event.result):
+                state.compensations.append(event.call_id)
         case SpeechSentenceGated():
             if event.decision == "release":
                 entry = _utterance_entry(state, event.leg_id, event.utterance_id)
@@ -366,11 +419,12 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
                 state.completed_steps.append(event.step)
         case ChildResult():
             state.child_results[event.child_leg_id] = dict(event.result)
-            state.grounding.add(dict(event.result))
-            _merge_evidence(state, event.result)
+            # Only runtime-built fields ground speech; the child model wrote `notes`.
+            state.grounding.add({k: v for k, v in event.result.items() if k not in _MODEL_AUTHORED})
+            _merge_child_evidence(state, event.child_leg_id, event.result)
             child = state.legs.get(event.child_leg_id)
             party = child.party if child is not None else "party"
-            summary = {k: v for k, v in event.result.items() if k != "evidence"}
+            summary = {k: v for k, v in event.result.items() if k not in ("evidence", "provenance")}
             _history(state, event.leg_id).append(
                 HistoryEntry(
                     "system", f"Result of the call to the {party}: {canonical_json(summary)}"

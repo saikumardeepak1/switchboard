@@ -117,8 +117,14 @@ function filterParams() {
   return params;
 }
 
+// The API needs a bearer token; the page takes it from the URL fragment (#token=...), which
+// never reaches the server's logs.
+const TOKEN = new URLSearchParams(location.hash.slice(1)).get("token") || "";
+
 async function getJSON(url) {
-  const res = await fetch(url, { headers: { accept: "application/json" } });
+  const headers = { accept: "application/json" };
+  if (TOKEN) headers.authorization = "Bearer " + TOKEN;
+  const res = await fetch(url, { headers });
   const body = await res.json();
   if (!res.ok) {
     const detail = Array.isArray(body.detail)

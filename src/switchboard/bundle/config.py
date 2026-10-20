@@ -29,6 +29,9 @@ _TOP_KEYS = frozenset(
         "handoff_message",
         "runtime_tools",
         "parties",
+        "rollback_on",
+        "bridge_phrases",
+        "bridge_after_ms",
     }
 )
 _VOICE_KEYS = frozenset({"voice_id", "ttfb_s", "chars_per_s"})
@@ -36,7 +39,7 @@ _ROUTER_KEYS = frozenset({"default_tier", "rules"})
 _RULE_KEYS = frozenset(
     {"name", "tier", "patterns", "state_flag", "min_words", "max_words", "min_questions"}
 )
-_LIMIT_KEYS = frozenset({"max_concurrent_conversations"})
+_LIMIT_KEYS = frozenset({"max_concurrent_conversations", "tokens_per_minute"})
 _PARTY_KEYS = frozenset({"description", "confirms"})
 
 DEFAULT_HANDOFF_MESSAGE = "I can't finish that myself, so I'm bringing in a teammate."
@@ -69,6 +72,8 @@ class RouterRuleSpec:
 @dataclass(frozen=True)
 class TenantLimits:
     max_concurrent_conversations: int = 10
+    # Model tokens per tenant per minute before turns go to the talker. None: unlimited.
+    tokens_per_minute: int | None = None
 
 
 @dataclass(frozen=True)
@@ -98,6 +103,11 @@ class AgentConfig:
     handoff_message: str = DEFAULT_HANDOFF_MESSAGE
     runtime_tools: tuple[str, ...] = ()
     parties: Mapping[str, PartyConfig] = field(default_factory=dict)
+    # Conversation outcomes (and "turn_aborted") after which the runtime compensates writes.
+    rollback_on: tuple[str, ...] = ()
+    # Fixed phrases spoken while a tool runs longer than `bridge_after_ms` (ADR-008).
+    bridge_phrases: tuple[str, ...] = ()
+    bridge_after_ms: int = 700
 
 
 def _mapping(value: object, where: str) -> Mapping[str, Any]:
@@ -201,7 +211,10 @@ def _limits(raw: object) -> TenantLimits:
     )
     if cap is None or cap < 1:
         raise ConfigError("agent.yaml tenant_limits: max_concurrent_conversations must be >= 1")
-    return TenantLimits(cap)
+    tpm = _int(data, "tokens_per_minute", "agent.yaml tenant_limits", None)
+    if tpm is not None and tpm < 1:
+        raise ConfigError("agent.yaml tenant_limits: tokens_per_minute must be >= 1")
+    return TenantLimits(cap, tpm)
 
 
 def _parties(raw: object) -> dict[str, PartyConfig]:
@@ -238,6 +251,15 @@ def parse_agent_config(raw: object) -> AgentConfig:
             raise ConfigError(
                 f"agent.yaml: unknown runtime tool {name!r}; known: {sorted(RUNTIME_TOOLS)}"
             )
+    rollback_on = raw.get("rollback_on") or []
+    if not isinstance(rollback_on, list) or not all(isinstance(o, str) for o in rollback_on):
+        raise ConfigError("agent.yaml: rollback_on must be a list of outcome names")
+    bridges = raw.get("bridge_phrases") or []
+    if not isinstance(bridges, list) or not all(isinstance(p, str) and p for p in bridges):
+        raise ConfigError("agent.yaml: bridge_phrases must be a list of phrases")
+    bridge_after = _int(raw, "bridge_after_ms", where, AgentConfig.bridge_after_ms)
+    if bridge_after is None or bridge_after < 0:
+        raise ConfigError("agent.yaml: bridge_after_ms must be >= 0")
     parties = _parties(raw.get("parties") or {})
     if parties and "call_party" not in runtime_tools:
         raise ConfigError("agent.yaml: 'parties' needs runtime tool 'call_party'")
@@ -254,4 +276,7 @@ def parse_agent_config(raw: object) -> AgentConfig:
         handoff_message=_str(raw, "handoff_message", where, DEFAULT_HANDOFF_MESSAGE),
         runtime_tools=tuple(dict.fromkeys(runtime_tools)),
         parties=MappingProxyType(parties),
+        rollback_on=tuple(dict.fromkeys(rollback_on)),
+        bridge_phrases=tuple(bridges),
+        bridge_after_ms=bridge_after,
     )

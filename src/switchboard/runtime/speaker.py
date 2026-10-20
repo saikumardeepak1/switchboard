@@ -14,7 +14,6 @@ correction before the utterance closes (block-or-self-correct).
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -76,6 +75,7 @@ class Speaker:
         on_played: PlayedCallback,
         on_correction: CorrectionCallback,
         on_barge_in: Callable[[], Awaitable[None]],
+        on_error: Callable[[BaseException], None] | None = None,
         barge_in: BargeInConfig | None = None,
         escalation_grace_s: float = 0.3,
     ) -> None:
@@ -84,6 +84,7 @@ class Speaker:
         self._on_played = on_played
         self._on_correction = on_correction
         self._on_barge_in = on_barge_in
+        self._on_error = on_error
         self._barge_in = barge_in or BargeInConfig()
         self._grace = escalation_grace_s
         self._queue: asyncio.Queue[Spoken] = asyncio.Queue()
@@ -167,7 +168,13 @@ class Speaker:
     async def _run(self) -> None:
         while True:
             item = await self._queue.get()
-            await self._process(item)
+            try:
+                await self._process(item)
+            except Exception as exc:
+                # One bad sentence must not silence the leg for the rest of the call.
+                self._utterance = None
+                if self._on_error is not None:
+                    self._on_error(exc)
             if self._queue.empty() and self._utterance is None:
                 self._idle.set()
 
@@ -201,7 +208,9 @@ class Speaker:
         if not verdict.done():
             u.unverified.append(verdict)
             return True
-        return not verdict.cancelled() and verdict.result().decision == "release"
+        if verdict.cancelled() or verdict.exception() is not None:
+            return False  # fail closed
+        return verdict.result().decision == "release"
 
     async def _synthesize(self, u: _Utterance, text: str) -> None:
         self.spoken.append(text)
@@ -218,11 +227,10 @@ class Speaker:
 
     async def _finish(self, u: _Utterance) -> None:
         for verdict in u.unverified:
-            with contextlib.suppress(asyncio.CancelledError):
-                decision = await verdict
-                if decision.decision != "release":
-                    await self._on_correction(u.utterance_id, CORRECTION)
-                    await self._synthesize(u, CORRECTION)
+            decision = await _settled(verdict)
+            if decision is not None and decision.decision != "release":
+                await self._on_correction(u.utterance_id, CORRECTION)
+                await self._synthesize(u, CORRECTION)
         while True:
             if u.paused_at is not None:
                 await u.resumed.wait()
@@ -234,3 +242,21 @@ class Speaker:
         self._utterance = None
         played = u.cursor.advance(self._clock.now())
         await self._on_played(u.utterance_id, played, False, u.provider)
+
+
+async def _settled(verdict: asyncio.Task[GateDecision]) -> GateDecision | None:
+    """The verdict, or None if the verdict task itself was cancelled.
+
+    A cancellation aimed at the speaker (stop, barge-in, hang-up) arrives here too, because the
+    speaker is awaiting the verdict; it must propagate or `stop()` would never return.
+    """
+    try:
+        return await verdict
+    except asyncio.CancelledError:
+        current = asyncio.current_task()
+        if current is not None and current.cancelling():
+            raise
+        return None
+    except Exception as exc:
+        # Fail closed: a sentence that played unverified gets the correction.
+        return GateDecision("block", 3, (), (), f"verifier failed: {type(exc).__name__}")

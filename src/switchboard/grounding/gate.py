@@ -1,8 +1,11 @@
 """Tiered grounding gate for spoken sentences (ADR-005).
 
-Tier 1 checks every extracted claim against the turn's evidence and decides on its own whenever
-a sentence carries a claim: one unsupported claim blocks, all supported releases. Hedged claims
-get the tolerance described in `evidence`.
+Tier 1 checks every extracted claim against the turn's evidence: all supported releases, and an
+unsupported exact claim blocks. Hedged claims get the tolerance described in `evidence`. An
+unsupported span that is ambiguous rather than wrong escalates instead of blocking (ADR-005): a
+hedged claim outside its tolerance ("about $15"), or a spelled number with more than one reading
+("twelve fifty" as $12.50, 12:50 or 1250). The verifier settles it, and with no verifier the
+escalation fails closed. One exact miss in the sentence still blocks it.
 
 Tier 2 handles sentences with no checkable claim. With a `SentenceScorer` it releases at or above
 `release_at`, blocks at or below `block_at`, and escalates in between. Without a scorer a
@@ -86,12 +89,13 @@ class GroundingGate:
         if not unsupported:
             return GateDecision("release", 1, claims, (), f"all {len(claims)} claims supported")
         listed = ", ".join(f"{c.kind} {format_value(c.kind, c.value)}" for c in unsupported)
+        ambiguous = all(_ambiguous(c) for c in unsupported)
         return GateDecision(
-            "block",
+            "escalate" if ambiguous else "block",
             1,
             claims,
             unsupported,
-            f"unsupported: {listed}",
+            f"{'ambiguous' if ambiguous else 'unsupported'}: {listed}",
             nearest=tuple(evidence.nearest(c) for c in unsupported),
         )
 
@@ -134,6 +138,12 @@ class GroundingGate:
             verdict.reason,
             score=decision.score,
         )
+
+
+def _ambiguous(claim: Claim) -> bool:
+    """A span whose reading, not its truth, is in doubt: hedged, or spelled with alternatives."""
+    spelled = not any(ch.isdigit() for ch in claim.raw)
+    return claim.approximate or (spelled and bool(claim.alternatives))
 
 
 def rewrite_hint(decision: GateDecision) -> str | None:

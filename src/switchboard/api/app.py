@@ -21,11 +21,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
+from switchboard.api.auth import Authenticator, Principal
 from switchboard.api.media import MediaStreamHandler, SessionFactory
 from switchboard.api.page import ACTIVITY_HTML
+from switchboard.api.stream_auth import StreamAuth
+from switchboard.core.events import AnyEvent, ConversationStarted
 from switchboard.core.store import EventStore
 from switchboard.telemetry.activity import (
     MAX_LIMIT,
@@ -51,6 +54,20 @@ OptStr = Annotated[str | None, Query()]
 OptFloat = Annotated[float | None, Query()]
 
 
+async def require_principal(request: Request) -> Principal:
+    authenticator: Authenticator | None = request.app.state.authenticator
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    found = None
+    if authenticator is not None and scheme.lower() == "bearer" and token.strip():
+        found = await authenticator.authenticate(token.strip())
+    if found is None:
+        raise HTTPException(401, "authentication required", {"WWW-Authenticate": "Bearer"})
+    return found
+
+
+Caller = Annotated[Principal, Depends(require_principal)]
+
+
 def _invalid(exc: InvalidFilter) -> JSONResponse:
     return JSONResponse(
         status_code=422,
@@ -68,14 +85,37 @@ def create_app(
     epoch_offset_s: float | None = None,
     service_name: str = "switchboard",
     capture_content: bool = False,
+    stream_auth: StreamAuth | None = None,
+    authenticator: Authenticator | None = None,
 ) -> FastAPI:
     """Build the app.
+
+    Activity and conversation reads need `Authorization: Bearer <token>` resolved by
+    `authenticator` (401 otherwise; with no authenticator every read is refused) and see only
+    the principal's tenant. `capture_content` decides whether payloads show transcript text and
+    tool data or only their type and length.
+
+    A `session_factory` needs `stream_auth`: the media endpoint takes tenant and customer only
+    from a server-signed stream token, and refuses a stream without one (see `stream_auth`).
 
     `epoch_offset_s` maps clock seconds (event `at`) onto Unix time. With it, activity items get
     an ISO `wall_time` and traces get real timestamps; without it, traces start at the epoch.
     """
+    if session_factory is not None and stream_auth is None:
+        raise ValueError("a Twilio session_factory needs stream_auth to authenticate streams")
     app = FastAPI(title="Switchboard", version="0.1.0")
-    stream = ActivityStream(store)
+    stream = ActivityStream(store, capture_content=capture_content)
+
+    app.state.authenticator = authenticator
+
+    async def owned_events(conversation_id: str, who: Principal) -> list[AnyEvent]:
+        events = await store.read(conversation_id)
+        started = next((e for e in events if isinstance(e, ConversationStarted)), None)
+        if started is None or started.tenant_id != who.tenant_id:
+            # Another tenant's conversation looks exactly like a missing one.
+            raise HTTPException(404, f"conversation {conversation_id!r} not found")
+        return events
+
     metrics = registry if registry is not None else Registry()
 
     def wall_time(at: float) -> str | None:
@@ -103,6 +143,7 @@ def create_app(
     @app.get("/v1/activity", response_model=None)
     async def activity(
         request: Request,
+        who: Caller,
         types: TypeQuery = None,
         conversation_id: OptStr = None,
         leg_id: OptStr = None,
@@ -123,6 +164,7 @@ def create_app(
             limit=limit,
             cursor=cursor or None,
             order=order,
+            tenant_id=who.tenant_id,
         )
         try:
             page = await stream.query(filters)
@@ -138,6 +180,7 @@ def create_app(
 
     @app.get("/v1/activity/histogram", response_model=None)
     async def activity_histogram(
+        who: Caller,
         bucket_s: Annotated[float, Query(gt=0, description="Bucket width in seconds")] = 60.0,
         types: TypeQuery = None,
         conversation_id: OptStr = None,
@@ -153,6 +196,7 @@ def create_app(
             since=since,
             until=until,
             text=q or None,
+            tenant_id=who.tenant_id,
         )
         try:
             buckets = await stream.histogram(filters, bucket_s)
@@ -161,25 +205,22 @@ def create_app(
         return {"bucket_s": bucket_s, "buckets": [b.to_dict() for b in buckets]}
 
     @app.get("/v1/conversations/{conversation_id}")
-    async def conversation(conversation_id: str) -> dict[str, Any]:
-        events = await store.read(conversation_id)
-        if not events:
-            raise HTTPException(404, f"conversation {conversation_id!r} not found")
+    async def conversation(conversation_id: str, who: Caller) -> dict[str, Any]:
+        events = await owned_events(conversation_id, who)
         timeline = TurnTimeline.from_events(events, capture_content=capture_content)
         return {"summary": summarize(events).to_dict(), "timeline": timeline.to_dict()}
 
     @app.get("/v1/conversations/{conversation_id}/trace")
-    async def conversation_trace(conversation_id: str) -> dict[str, Any]:
-        timeline = await stream.timeline(conversation_id, capture_content=capture_content)
-        if timeline is None:
-            raise HTTPException(404, f"conversation {conversation_id!r} not found")
+    async def conversation_trace(conversation_id: str, who: Caller) -> dict[str, Any]:
+        events = await owned_events(conversation_id, who)
+        timeline = TurnTimeline.from_events(events, capture_content=capture_content)
         return to_otlp_json(
             timeline.spans(), service_name=service_name, epoch_offset_s=epoch_offset_s or 0.0
         )
 
-    if session_factory is not None:
+    if session_factory is not None and stream_auth is not None:
         app.add_api_websocket_route(
-            "/v1/twilio/media", MediaStreamHandler(session_factory, metrics)
+            "/v1/twilio/media", MediaStreamHandler(session_factory, metrics, stream_auth)
         )
     else:
         # Register the gauges anyway so dashboards see zeros instead of missing series.

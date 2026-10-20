@@ -172,3 +172,47 @@ def test_lexical_scorer_overlap() -> None:
     assert scorer.score("Your package is with the courier.", evidence) == pytest.approx(1.0)
     assert scorer.score("Your package was destroyed in a fire.", evidence) < 0.5
     assert scorer.score("Okay.", evidence) == 1.0
+
+
+AMBIGUITY = Evidence(tool_results=[{"refund": 12.5, "eta_minutes": 20}])
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "It's about $15.",  # hedged, outside any tolerance
+        "That comes to twelve fifty.",  # spelled: $12.50, 12:50 or 1250
+        "It should take roughly 45 minutes.",
+    ],
+)
+def test_ambiguous_unsupported_spans_escalate_rather_than_block(sentence: str) -> None:
+    decision = GroundingGate().review(sentence, AMBIGUITY)
+    assert decision.decision == "escalate", sentence
+    assert decision.tier == 1
+    assert decision.unsupported
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "It's $15.",
+        "Your refund is $15 and arrives in about 45 minutes.",  # one exact miss blocks
+    ],
+)
+def test_an_exact_unsupported_claim_still_blocks(sentence: str) -> None:
+    assert GroundingGate().review(sentence, AMBIGUITY).decision == "block"
+
+
+async def test_an_ambiguous_escalation_without_a_verifier_fails_closed() -> None:
+    gate = GroundingGate()
+    decision = gate.review("It's about $15.", AMBIGUITY)
+    final = await gate.resolve(decision, "It's about $15.", AMBIGUITY)
+    assert (final.decision, final.tier) == ("block", 3)
+
+
+async def test_an_ambiguous_escalation_goes_to_the_verifier() -> None:
+    verifier = FixedVerifier(True)
+    gate = GroundingGate(verifier=verifier)
+    decision = gate.review("That comes to twelve fifty.", AMBIGUITY)
+    final = await gate.resolve(decision, "That comes to twelve fifty.", AMBIGUITY)
+    assert final.decision == "release" and verifier.calls == 1

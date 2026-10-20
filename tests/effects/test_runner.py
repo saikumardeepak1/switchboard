@@ -247,7 +247,7 @@ async def test_non_dict_result_is_an_error(runner: EffectRunner) -> None:
     assert result.error is not None and "must return a JSON object" in result.error
 
 
-async def test_cancelling_the_caller_marks_the_claim_failed(
+async def test_cancelling_the_caller_leaves_the_claim_pending(
     runner: EffectRunner, bench: Bench, ledger: IdempotencyLedger, clock: VirtualClock
 ) -> None:
     bench.delay_s["issue_refund"] = 3.0
@@ -259,7 +259,8 @@ async def test_cancelling_the_caller_marks_the_claim_failed(
     assert bench.cancelled == ["issue_refund"]
     key = idempotency_key("conv_1", 4, "issue_refund", REFUND, ["order_id", "amount"])
     entry = await ledger.get(key)
-    assert entry is not None and entry.state == "failed"
+    # The effect may have landed downstream; only the lease may decide it is dead.
+    assert entry is not None and entry.state == "pending"
 
 
 async def test_compensate_runs_declared_tool_at_most_once(

@@ -22,6 +22,7 @@ __all__ = [
 ]
 
 PROCEDURE_RULE_PREFIX = "procedure:requires:"
+COMPENSATION_RULE = "runtime:compensation_only"
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +82,8 @@ class CompiledPolicy:
     rules: tuple[Rule, ...]
     procedure: ProcedureGraph
     tool_effects: Mapping[str, str] = field(default_factory=dict)
+    # Tools only the runtime runs, as compensations. Never allowed as a proposal.
+    compensation_only: frozenset[str] = frozenset()
     _by_tool: Mapping[str, tuple[Rule, ...]] = field(init=False, repr=False, compare=False)
     _by_effect: tuple[Rule, ...] = field(init=False, repr=False, compare=False)
 
@@ -118,6 +121,12 @@ class CompiledPolicy:
         return selected
 
     def explain(self, call: ProposedCall, ctx: CheckContext) -> CheckReport:
+        if call.tool in self.compensation_only:
+            refusal = (
+                f"{call.tool} is a compensation that only the runtime runs. "
+                "Offer a handoff if something needs to be undone."
+            )
+            return CheckReport(Verdict(False, [COMPENSATION_RULE], refusal), {})
         ids: list[str] = []
         hints: list[str] = []
         missing: dict[str, tuple[str, ...]] = {}

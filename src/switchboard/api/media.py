@@ -25,6 +25,7 @@ from typing import Protocol
 
 from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
 
+from switchboard.api.stream_auth import POLICY_VIOLATION, InvalidStreamToken, StreamAuth
 from switchboard.providers.twilio import (
     TwilioMark,
     TwilioMedia,
@@ -75,8 +76,12 @@ class SessionFactory(Protocol):
 
 
 class MediaStreamHandler:
-    def __init__(self, factory: SessionFactory, registry: Registry) -> None:
+    def __init__(self, factory: SessionFactory, registry: Registry, auth: StreamAuth) -> None:
         self._factory = factory
+        self._auth = auth
+        self._rejected = registry.counter(
+            "switchboard_twilio_streams_rejected_total", "Streams refused by authentication."
+        )
         self._active = registry.gauge(
             "switchboard_twilio_streams_active", "Twilio media streams currently open."
         )
@@ -91,6 +96,10 @@ class MediaStreamHandler:
         )
 
     async def __call__(self, ws: WebSocket) -> None:
+        if not self._auth.check_upgrade(str(ws.url), ws.headers.get("x-twilio-signature")):
+            self._rejected.inc()
+            await ws.close(POLICY_VIOLATION)
+            return
         await ws.accept()
         session: MediaSession | None = None
         pump: asyncio.Task[None] | None = None
@@ -107,8 +116,16 @@ class MediaStreamHandler:
                     log.warning("dropping malformed Twilio message: %s", exc)
                     continue
                 if isinstance(msg, TwilioStart) and session is None:
+                    try:
+                        claims = self._auth.claims(msg.call_sid, msg.custom_parameters)
+                    except InvalidStreamToken as exc:
+                        self._rejected.inc()
+                        log.warning("refusing Twilio stream %s: %s", msg.stream_sid, exc)
+                        await _close(ws, code=POLICY_VIOLATION)
+                        break
+                    # Tenant, customer and party come from the verified token only.
                     session = await self._factory.start(
-                        msg.call_sid, msg.stream_sid, msg.custom_parameters
+                        msg.call_sid, msg.stream_sid, claims.parameters()
                     )
                     self._active.inc()
                     pump = asyncio.create_task(self._pump(ws, session, msg.stream_sid))

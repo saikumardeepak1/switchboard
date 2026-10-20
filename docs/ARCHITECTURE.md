@@ -116,6 +116,7 @@ Event catalog (type string, payload fields):
 | `policy.verdict` | call_id, allowed, rule_ids, repair_hint |
 | `tool.executed` | call_id, tool, result, idempotency_key, replayed (bool) |
 | `tool.compensated` | call_id, compensation_tool, result |
+| `tool.unresolved` | call_id, tool, idempotency_key, reason (still running at hang-up; ledger left pending) |
 | `speech.sentence_gated` | utterance_id, sentence, decision (`release`/`block`/`escalate`), tier, claims |
 | `speech.played` | utterance_id, text_played, interrupted (bool), tts_provider |
 | `procedure.advanced` | step, state |
@@ -265,9 +266,17 @@ k)` computes pass^k.
 
 ### telemetry and api
 
+The Twilio media endpoint trusts no caller-supplied identity: `api.stream_auth` verifies a
+server-signed stream token (HMAC-SHA256, passed as the `token` stream parameter) and takes tenant,
+customer and party from it alone, closing the socket with 1008 otherwise. An `X-Twilio-Signature`
+check on the upgrade is optional on top.
+
 `ActivityStream` is a projection over the event store with filters (conversation, leg, type, time
 range) and frequency buckets for charts. The API serves it at `GET /v1/activity` and
-`GET /v1/activity/histogram`.
+`GET /v1/activity/histogram`. Every read needs a bearer token that a pluggable `Authenticator`
+resolves to a `Principal` (401 otherwise) and is scoped to that principal's tenant; another
+tenant's conversation is a 404. With content capture off, payloads show only the type and length
+of transcript text, tool arguments and results.
 
 ## Testing rules
 

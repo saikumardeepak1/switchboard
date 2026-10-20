@@ -30,6 +30,7 @@ from switchboard.brain import (
     RouteRule,
     Tier,
     ToolCallChunk,
+    Usage,
     canonical_json,
 )
 from switchboard.bundle import Bundle
@@ -47,15 +48,22 @@ from switchboard.core import (
     LegOpened,
     MemoryLoaded,
     ProcedureAdvanced,
+    SpeechPlayed,
+    ToolCompensated,
     ToolExecuted,
+    ToolUnresolved,
+    TurnCommitted,
     new_id,
 )
 from switchboard.effects import (
     EffectContext,
     EffectRunner,
     IdempotencyLedger,
+    Saga,
     ToolCall,
+    ToolResult,
     ToolSpec,
+    idempotency_key,
 )
 from switchboard.grounding import Evidence, GroundingGate
 from switchboard.knowledge import BitemporalStore, Document, FactStore, KnowledgeIndex
@@ -89,6 +97,9 @@ REPORT_RESULT = ToolSpec(
         "required": ["confirmed"],
     },
 )
+
+# Rule id of a child's confirmation refused because the party never answered.
+NO_PARTY_ANSWER = "runtime:no_party_answer"
 
 CHILD_PROMPT = (
     "You are on an outbound phone call to the {party} on behalf of {agent}. {description}\n"
@@ -135,6 +146,8 @@ class Conversation:
         self._unlogged = Evidence()
         self._index = _knowledge_index(bundle, runtime.facts)
         self._tasks: set[asyncio.Task[Any]] = set()
+        # Tool executions in flight, kept apart so `end` waits for them instead of cancelling.
+        self._executions: dict[asyncio.Task[Any], tuple[str | None, str, str, str | None]] = {}
 
     # the actor
 
@@ -196,6 +209,18 @@ class Conversation:
             return self.runtime.talker
         return self.runtime.llm
 
+    def spend_tokens(self, usage: Usage) -> None:
+        tokens = usage.input_tokens + usage.output_tokens
+        self.runtime.admission.record_tokens(self.state.tenant_id, tokens, now=self.clock.now())
+
+    def over_token_budget(self) -> bool:
+        """The tenant spent its tokens-per-minute budget: route to the talker (ADR-013)."""
+        return self.runtime.admission.over_budget(
+            self.state.tenant_id,
+            now=self.clock.now(),
+            default_budget=self.bundle.config.tenant_limits.tokens_per_minute,
+        )
+
     def requested_tools(self, text: str) -> list[str]:
         """Write tools a committed user turn newly asks for (ADR-009)."""
         writes = [name for name, effect in self.bundle.tool_effects().items() if effect == "write"]
@@ -229,6 +254,33 @@ class Conversation:
             leg_id=None,
             count=len(self.memory_texts),
             texts=self.memory_texts if self.runtime.capture_content else [],
+        )
+
+    def party_answer(self, child_id: str) -> str | None:
+        """Event id of the latest turn the party committed on a child leg after the agent
+        first spoke on its current dial, or None if the party has said nothing since."""
+        spoke = False
+        answer: str | None = None
+        for event in self.events:
+            if event.leg_id != child_id:
+                continue
+            if isinstance(event, LegOpened):
+                spoke, answer = False, None
+            elif isinstance(event, SpeechPlayed) and event.text_played.strip():
+                spoke = True
+            elif isinstance(event, TurnCommitted) and spoke:
+                answer = event.event_id
+        return answer
+
+    def check_child_report(self, child: Leg, call: ToolCallChunk) -> Verdict | None:
+        """Refuse a confirmation the other party never gave."""
+        if call.args.get("confirmed") is not True or self.party_answer(child.leg_id):
+            return None
+        return Verdict(
+            False,
+            [NO_PARTY_ANSWER],
+            f"The {child.party} has not answered yet. Ask your question and wait for their "
+            "reply, or report confirmed false.",
         )
 
     def check(self, call: ToolCallChunk, tool_effects: Mapping[str, str]) -> Verdict:
@@ -300,7 +352,68 @@ class Conversation:
                 )
             return payload
 
-        return await asyncio.shield(self._spawn(run()))
+        task = self._spawn(run())
+        self._tasks.discard(task)
+        spec = self.bundle.registry.get(tool)
+        key = None
+        if spec is not None and spec.spec.effect == "write":
+            key = idempotency_key(self.id, intent, tool, args, spec.spec.idempotency)
+        self._executions[task] = (leg_id, call_id, tool, key)
+        task.add_done_callback(lambda t: self._executions.pop(t, None))
+        return await asyncio.shield(task)
+
+    async def rollback(self, call_ids: Sequence[str] | None = None) -> None:
+        """Compensate executed writes, newest first, with the compensations their specs declare.
+
+        `call_ids` limits the rollback to those calls. Every compensation goes through the
+        ledger under a key derived from the original, and a call already compensated in the log
+        is skipped, so a second rollback runs nothing twice (ADR-009).
+        """
+        saga = Saga(self.runner)
+        done = set(self.state.compensations)
+        chosen = None if call_ids is None else set(call_ids)
+        calls = [
+            c
+            for c in self.state.calls.values()
+            if c.executed
+            and not c.replayed
+            and c.call_id not in done
+            and (chosen is None or c.call_id in chosen)
+            and self.runner.compensation_for(c.tool) is not None
+        ]
+        for call in sorted(calls, key=lambda c: c.executed_seq or 0):
+            saga.record(
+                ToolResult(
+                    call.call_id,
+                    call.tool,
+                    dict(call.args),
+                    ok=tool_succeeded(call.result or {}),
+                    result=call.result,
+                    idempotency_key=call.idempotency_key,
+                )
+            )
+        report = await saga.abort(EffectContext(self.id, 0))
+        legs = {c.call_id: c.leg_id for c in calls}
+        for outcome in report.outcomes:
+            undo = outcome.result
+            if outcome.compensation_tool is None or undo is None:
+                continue
+            payload = undo.result if undo.ok and undo.result is not None else None
+            await self.emit(
+                ToolCompensated,
+                leg_id=legs.get(outcome.call_id),
+                call_id=outcome.call_id,
+                compensation_tool=outcome.compensation_tool,
+                result=payload if payload is not None else {"error": undo.error or "failed"},
+            )
+
+    async def abort_turn(self, turn_id: str) -> None:
+        """The runtime gave up on a turn: undo its writes if the bundle asks for that."""
+        if "turn_aborted" not in self.bundle.config.rollback_on:
+            return
+        turn = self.state.turns.get(turn_id)
+        if turn is not None and turn.call_ids:
+            await self.rollback(list(turn.call_ids))
 
     # multi-party (ADR-003)
 
@@ -436,9 +549,7 @@ class Conversation:
         child.start_agent_turn(opened_id, "outbound_call")
 
     async def finish_child(self, child: Leg, call: ToolCallChunk, causation_id: str) -> None:
-        assert child.parent_leg_id is not None
         confirmed = call.args.get("confirmed") is True
-        notes = str(call.args.get("notes", ""))
         executed = await self.emit(
             ToolExecuted,
             leg_id=child.leg_id,
@@ -447,18 +558,37 @@ class Conversation:
             tool=call.name,
             result={"recorded": True, "confirmed": confirmed},
         )
+        await self.report_child(
+            child, confirmed, str(call.args.get("notes", "")), executed.event_id
+        )
+
+    async def report_child(
+        self, child: Leg, confirmed: bool, notes: str, causation_id: str | None
+    ) -> None:
+        """Deliver a child call's answer to its parent and hang the child up.
+
+        The confirmation flag is set only with provenance: the child leg and the party's turn
+        that answered. Without an answer on the leg the flag is not set at all.
+        """
+        assert child.parent_leg_id is not None
         config = self.bundle.config.parties.get(child.party)
-        evidence = {config.confirms: confirmed} if config and config.confirms else {}
+        answer = self.party_answer(child.leg_id)
+        evidence: dict[str, Any] = {}
+        provenance: dict[str, Any] = {}
+        if config and config.confirms and answer is not None:
+            evidence = {config.confirms: confirmed}
+            provenance = {config.confirms: {"child_leg_id": child.leg_id, "turn_event_id": answer}}
         result = {
             "party": child.party,
-            "confirmed": confirmed,
+            "confirmed": confirmed and answer is not None,
             "notes": notes,
             "evidence": evidence,
+            "provenance": provenance,
         }
         delivered = await self.emit(
             ChildResult,
             leg_id=child.parent_leg_id,
-            causation_id=executed.event_id,
+            causation_id=causation_id,
             child_leg_id=child.leg_id,
             result=result,
         )
@@ -503,8 +633,11 @@ class Conversation:
         for leg in sorted(self.legs.values(), key=lambda leg: leg.role != "outbound_child"):
             if not leg.closed:
                 await leg.close("conversation_ended")
+        await self._settle_executions(outcome)
         for task in list(self._tasks):
             task.cancel()
+        if outcome in self.bundle.config.rollback_on:
+            await self.rollback()
         await self.emit(ConversationEnded, leg_id=None, outcome=outcome)
         if self.runtime.memory is not None:
             self.runtime.memory.apply(consolidate(self.events, self.clock.now()))
@@ -512,11 +645,38 @@ class Conversation:
         await self.runtime.actors.stop(self.id)
         self.runtime.conversations.pop(self.id, None)
 
+    async def _settle_executions(self, outcome: str) -> None:
+        """Let in-flight tool calls finish, up to `end_write_timeout_s` on the clock.
+
+        Cancelling a write mid-call would leave its effect applied downstream with nothing in
+        the log. One still running at the bound is cancelled without touching its ledger claim,
+        and recorded as `tool.unresolved`.
+        """
+        if not self._executions:
+            return
+        timer = asyncio.ensure_future(self.clock.sleep(self.runtime.end_write_timeout_s))
+        try:
+            while self._executions and not timer.done():
+                await asyncio.wait({*self._executions, timer}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            timer.cancel()
+        for task, (leg_id, call_id, tool, key) in list(self._executions.items()):
+            task.cancel()
+            await asyncio.wait([task])
+            await self.emit(
+                ToolUnresolved,
+                leg_id=leg_id,
+                call_id=call_id,
+                tool=tool,
+                idempotency_key=key,
+                reason=f"conversation ended ({outcome})",
+            )
+
     async def abandon(self) -> None:
         """Simulate the process dying: stop every task and write nothing more."""
         for leg in self.legs.values():
             leg.abandon()
-        for task in list(self._tasks):
+        for task in [*self._tasks, *self._executions]:
             task.cancel()
         self.runtime.admission.release(self.state.tenant_id, self.id)
         self.runtime.conversations.pop(self.id, None)
@@ -548,6 +708,7 @@ class Runtime:
         max_llm_calls: int = 6,
         capture_content: bool = True,
         request_detector: RequestDetector | None = None,
+        end_write_timeout_s: float = 10.0,
     ) -> None:
         self.clock = clock
         self.store = store
@@ -566,6 +727,8 @@ class Runtime:
         # Record knowledge and memory text in the log, the system of record (see module doc).
         self.capture_content = capture_content
         self.request_detector = request_detector or RequestDetector()
+        # How long ending a conversation waits for tool calls already running.
+        self.end_write_timeout_s = end_write_timeout_s
         self.conversations: dict[str, Conversation] = {}
         self.actors = ActorRuntime(self._actor, clock)
 

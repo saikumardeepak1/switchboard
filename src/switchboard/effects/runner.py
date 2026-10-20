@@ -210,7 +210,8 @@ class EffectRunner:
             await self._ledger.fail(key, token, message)
             return self._error(attempt, message)
         except BaseException:
-            await self._ledger.fail(key, token, "cancelled")
+            # Cancelled mid-call: the effect may already have landed downstream. Leave the claim
+            # pending so its lease, not this guess, decides whether a retry may run it.
             raise
         # A False here means the claim went stale and another attempt took over. The effect
         # has happened either way, so report it truthfully rather than hide it.

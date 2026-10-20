@@ -166,3 +166,51 @@ def test_nearest_value_of_same_kind() -> None:
 def test_words_bag_for_scorers() -> None:
     evidence = Evidence(tool_results=[{"status": "Out for delivery"}], memory=["Prefers email"])
     assert {"delivery", "email", "status"} <= evidence.words
+
+
+TYPED = {"tool": "lookup_order", "eta_minutes": 20, "items": 3, "order_id": "48213"}
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "I've refunded $20 to your card.",
+        "I've issued a refund of $3.",
+        "Your refund of 48,213 dollars is on its way.",
+    ],
+)
+def test_plain_numbers_and_ids_are_not_money_or_references(sentence: str) -> None:
+    from switchboard.grounding import GroundingGate
+
+    decision = GroundingGate().review(sentence, Evidence(tool_results=[TYPED]))
+    assert decision.decision == "block", sentence
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Your order 48213 is on the way.",
+        "It has 3 items.",
+        "It arrives in 20 minutes.",
+    ],
+)
+def test_typed_values_still_match_their_own_kind(sentence: str) -> None:
+    from switchboard.grounding import GroundingGate
+
+    decision = GroundingGate().review(sentence, Evidence(tool_results=[TYPED]))
+    assert decision.decision == "release", sentence
+
+
+@pytest.mark.parametrize(
+    ("value", "sentence"),
+    [
+        ({"amount": 20}, "I refunded $20."),
+        ({"refund_total": 12.5}, "Your refund is $12.50."),
+        ({"fee_cents": 499}, "The fee is $4.99."),
+        ({"pay_dollars": 182}, "You earned $182."),
+        ({"note": "Refunded $15.00 on Monday"}, "We refunded $15."),
+        ({"week_total": 182.4}, "You've earned $182.40."),
+    ],
+)
+def test_money_comes_from_money_keys_and_currency_text(value: object, sentence: str) -> None:
+    assert Evidence(tool_results=[value]).supports(one(sentence)), sentence
