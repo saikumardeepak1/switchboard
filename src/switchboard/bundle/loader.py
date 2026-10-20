@@ -10,6 +10,8 @@ Directory format::
 
 `tools.py` is trusted code from the customer's own repository. It is imported as a submodule of
 a fresh synthetic package per load, so relative imports work and two loads never share state.
+That package and everything imported under it live in `sys.modules` until `Bundle.close()`
+removes them; a bundle is also a context manager. A failed import cleans up after itself.
 
 The bundle id is `bnd_` plus the first 12 hex chars of a sha256 over every file (sorted relative
 paths with their bytes; `__pycache__`, `*.pyc` and hidden files skipped) and the canonical JSON of
@@ -64,6 +66,22 @@ class Bundle:
     runtime_tools: tuple[ToolSpec, ...]
     documents: tuple[KnowledgeDoc, ...]
     tools_module: ModuleType
+    # The synthetic package `tools.py` was imported under; see `close`.
+    module_namespace: str = ""
+
+    def close(self) -> None:
+        """Drop this load's modules from `sys.modules`. Idempotent.
+
+        Conversations pinned to the bundle keep working: they hold the registry and the tools
+        module directly. Only a later import by name would miss.
+        """
+        _unload(self.module_namespace)
+
+    def __enter__(self) -> Bundle:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     def tool_specs(self) -> list[ToolSpec]:
         """Every tool the model may call: registry tools and declared runtime tools, by name."""
@@ -78,7 +96,15 @@ def load_bundle(path: str | Path) -> Bundle:
     if not root.is_dir():
         raise BundleError(f"{root} is not a directory")
     config = _load_config(root)
-    module = _import_tools(root)
+    module, namespace = _import_tools(root)
+    try:
+        return _build(root, config, module, namespace)
+    except BaseException:
+        _unload(namespace)
+        raise
+
+
+def _build(root: Path, config: AgentConfig, module: ModuleType, namespace: str) -> Bundle:
     registry = getattr(module, "registry", None)
     if not isinstance(registry, ToolRegistry):
         raise BundleError(f"{root}/tools.py must define a module-level 'registry' ToolRegistry")
@@ -113,6 +139,7 @@ def load_bundle(path: str | Path) -> Bundle:
         runtime_tools=runtime_tools,
         documents=_load_documents(root),
         tools_module=module,
+        module_namespace=namespace,
     )
 
 
@@ -133,7 +160,7 @@ def _load_config(root: Path) -> AgentConfig:
         raise BundleError(str(err)) from err
 
 
-def _import_tools(root: Path) -> ModuleType:
+def _import_tools(root: Path) -> tuple[ModuleType, str]:
     if not (root / "tools.py").is_file():
         raise BundleError(f"{root}: tools.py is missing")
     package = f"_switchboard_bundle_{next(_load_counter)}"
@@ -143,9 +170,18 @@ def _import_tools(root: Path) -> ModuleType:
     pkg.__path__ = [str(root)]
     sys.modules[package] = pkg
     try:
-        return importlib.import_module(f"{package}.tools")
+        return importlib.import_module(f"{package}.tools"), package
     except Exception as err:
+        _unload(package)
         raise BundleError(f"{root}/tools.py failed to import: {err}") from err
+
+
+def _unload(package: str) -> None:
+    if not package:
+        return
+    prefix = f"{package}."
+    for name in [n for n in sys.modules if n == package or n.startswith(prefix)]:
+        del sys.modules[name]
 
 
 def _load_policy_docs(root: Path) -> list[tuple[str, Mapping[str, Any]]]:
