@@ -84,6 +84,7 @@ class TurnState:
     status: TurnStatus
     text: str
     anchor_event_id: str
+    call_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -99,6 +100,8 @@ class CallState:
     result: dict[str, Any] | None = None
     idempotency_key: str | None = None
     replayed: bool = False
+    # The request this call serves (ADR-009); fixed when its turn commits.
+    intent: int = 0
 
     @property
     def allowed(self) -> bool:
@@ -130,6 +133,8 @@ class ConversationState:
     history: dict[str, list[HistoryEntry]] = field(default_factory=dict)
     calls: dict[str, CallState] = field(default_factory=dict)
     evidence: dict[str, Any] = field(default_factory=dict)
+    # Requests the user has made per write tool, from `turn.committed`.
+    intents: dict[str, int] = field(default_factory=dict)
     tool_results: list[dict[str, Any]] = field(default_factory=list)
     completed_steps: list[str] = field(default_factory=list)
     child_results: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -261,10 +266,16 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
             if event.turn_id in state.turns:
                 state.turns[event.turn_id].status = "cancelled"
         case TurnCommitted():
+            for tool in event.requests:
+                state.intents[tool] = state.intents.get(tool, 0) + 1
             turn = state.turns.get(event.turn_id)
             if turn is not None and turn.status == "speculating":
                 turn.status = "committed"
                 turn.text = event.text
+                # Calls proposed while speculating serve the request this commit opened.
+                for call_id in turn.call_ids:
+                    waiting = state.calls[call_id]
+                    waiting.intent = state.intents.get(waiting.tool, 0)
                 for entry in _history(state, event.leg_id):
                     if entry.role == "user" and entry.turn_id == event.turn_id:
                         entry.content = event.text
@@ -285,8 +296,16 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
                 state.anchors.setdefault(event.causation_id, event.turn_id)
         case ToolProposed():
             state.calls[event.call_id] = CallState(
-                event.call_id, event.leg_id, event.tool, dict(event.args), event.seq, turn_id
+                event.call_id,
+                event.leg_id,
+                event.tool,
+                dict(event.args),
+                event.seq,
+                turn_id,
+                intent=state.intents.get(event.tool, 0),
             )
+            if turn_id is not None and turn_id in state.turns:
+                state.turns[turn_id].call_ids.append(event.call_id)
             _history(state, event.leg_id).append(
                 HistoryEntry(
                     "assistant",

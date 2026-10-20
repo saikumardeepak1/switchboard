@@ -41,8 +41,8 @@ class ToolCall:
 @dataclass(frozen=True)
 class EffectContext:
     conversation_id: str
-    # The conversation step that proposed the call. Part of the idempotency key: see keys.py.
-    step_seq: int
+    # The request this call serves, counted per tool by the policy layer. See keys.py.
+    intent: int
     speculative: bool = False
 
 
@@ -116,7 +116,7 @@ class EffectRunner:
         if ctx.speculative:
             return self._refuse_speculative(attempt)
         key = idempotency_key(
-            ctx.conversation_id, ctx.step_seq, call.tool, call.args, tool.spec.idempotency
+            ctx.conversation_id, ctx.intent, call.tool, call.args, tool.spec.idempotency
         )
         return await self._run_write(tool, attempt, key)
 

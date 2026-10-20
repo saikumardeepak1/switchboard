@@ -3,13 +3,22 @@
 A key names one intent to cause a side effect. It is derived from:
 
 - `conversation_id`, so identical calls in two conversations never collide.
-- `step_seq`, the conversation step that proposed the call. The same refund issued twice in
-  one conversation at different steps is two intents and must run twice; a retry or replay of
-  the same step is one intent and must run once. Without the step, a legitimate second refund
-  would be swallowed as a duplicate. With a random id per attempt instead, retries would never
-  dedupe at all, which is the double-refund this module exists to prevent.
 - the tool name, which also prefixes the key so ledgers stay readable.
 - the canonical form of the identity arguments.
+- `intent`, an explicit counter per tool that the policy layer moves only when the user makes a
+  new request for that tool (`switchboard.policy.RequestDetector`, recorded on
+  `turn.committed` and folded into conversation state).
+
+Why an intent counter and not the step that proposed the call. The first version keyed on the
+proposing step's sequence number. That dedupes retries and crash replays of one proposal, but a
+model that proposes the same `mark_delivered` again in a later turn ("thanks, is it marked
+now?") gets a new step, a new key, and a second downstream write. Calls do get re-proposed
+across turns; models are not reliable about remembering they already acted. With the counter,
+re-proposals within one request share a key and replay, while a real second request ("refund
+another ten dollars") moves the counter and runs. The counter lives in the log, so recovery
+derives the same key. A random id per attempt would never dedupe at all, which is the
+double-refund this module exists to prevent; what counts as "the same request" is a policy
+question, so the policy layer answers it, not the model.
 
 Canonical JSON sorts keys, drops whitespace, writes integral floats as integers (so `1.0` and
 `1` agree, the way they do once they have passed through any JSON hop), applies Unicode NFC to
@@ -68,7 +77,7 @@ def _digest(payload: Any) -> str:
 
 def idempotency_key(
     conversation_id: str,
-    step_seq: int,
+    intent: int,
     tool: str,
     args: Mapping[str, Any],
     identity_fields: Sequence[str] | None,
@@ -76,7 +85,7 @@ def idempotency_key(
     """Key for one intent. `identity_fields` None means every argument defines the intent."""
     fields = sorted(args) if identity_fields is None else sorted(identity_fields)
     identity = {name: args[name] for name in fields if name in args}
-    payload = {"conversation": conversation_id, "step": step_seq, "tool": tool, "args": identity}
+    payload = {"conversation": conversation_id, "intent": intent, "tool": tool, "args": identity}
     return f"{tool}:{_digest(payload)}"
 
 

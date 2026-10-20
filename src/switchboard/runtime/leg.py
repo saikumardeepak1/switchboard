@@ -295,6 +295,7 @@ class Leg:
                 turn_id=spec.turn_id,
                 text=signal.text,
                 endpointing_ms=waited_ms,
+                requests=self.conversation.requested_tools(signal.text),
             )
             spec.text = signal.text
             await self._engine.handle(signal)  # promotes: the token stops being speculative
@@ -311,6 +312,7 @@ class Leg:
             turn_id=turn_id,
             text=signal.text,
             endpointing_ms=waited_ms,
+            requests=self.conversation.requested_tools(signal.text),
         )
         ctx = TurnContext(turn_id, committed.event_id, signal.text)
         ctx.committed.set()
@@ -584,7 +586,7 @@ class Leg:
             call.call_id,
             call.name,
             dict(call.args),
-            step_seq=proposed.seq,
+            intent=conv.state.calls[call.call_id].intent,
             speculative=token.speculative,
             causation_id=proposed.event_id,
         )

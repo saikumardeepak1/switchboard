@@ -142,6 +142,17 @@ by the LLM.
 **Evidence.** Checkpoints alone still double-refund when the reply is lost after the side effect;
 deterministic keys plus lookup-before-retry fixes it. Random UUIDs per retry defeat dedupe.
 
+**Revision (2026-10).** The step sequence in the key was the wrong unit. It dedupes retries and
+crash replays of one proposal, but models re-propose writes in later turns ("thanks, is it
+marked now?"), and each re-proposal got a new step, a new key and a second downstream write. The
+key is now conversation id, tool, canonical identity arguments and an explicit intent counter
+per tool. The policy layer moves the counter only when a committed user turn makes a new request
+for that tool (`RequestDetector`, cue words per tool, status questions excluded), and records it
+on `turn.committed` so recovery derives the same key. A re-proposal in the same request replays
+from the ledger; a real second request ("refund another ten dollars") runs. The cost: a request
+the detector misses reuses the old key and replays instead of running, which fails safe for
+writes, and a bundle can name its own cue words when the tool name is a poor cue.
+
 ## ADR-010: Knowledge is bitemporal; incidents expire on their own
 
 **Decision.** Every fact has valid time (when it is true in the world) and transaction time (when

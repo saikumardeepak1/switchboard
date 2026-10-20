@@ -70,6 +70,8 @@ class TurnCommitted(Event):
     turn_id: str
     text: str
     endpointing_ms: float
+    # Write tools this turn newly asks for; each opens a new idempotency intent (ADR-009).
+    requests: list[str] = Field(default_factory=list)
 
 
 class BrainRouted(Event):

@@ -60,7 +60,13 @@ from switchboard.effects import (
 from switchboard.grounding import Evidence, GroundingGate
 from switchboard.knowledge import BitemporalStore, Document, FactStore, KnowledgeIndex
 from switchboard.memory import MemoryStore, consolidate
-from switchboard.policy import CheckContext, ProcedureState, ProposedCall, Verdict
+from switchboard.policy import (
+    CheckContext,
+    ProcedureState,
+    ProposedCall,
+    RequestDetector,
+    Verdict,
+)
 from switchboard.policy.procedure import tool_succeeded
 from switchboard.runtime.admission import AdmissionController, AdmissionRejected
 from switchboard.runtime.io import Dialer, LegIO
@@ -190,6 +196,11 @@ class Conversation:
             return self.runtime.talker
         return self.runtime.llm
 
+    def requested_tools(self, text: str) -> list[str]:
+        """Write tools a committed user turn newly asks for (ADR-009)."""
+        writes = [name for name, effect in self.bundle.tool_effects().items() if effect == "write"]
+        return self.runtime.request_detector.requested(text, writes)
+
     def knowledge_texts(self) -> list[str]:
         return list(self._knowledge.values())
 
@@ -255,7 +266,7 @@ class Conversation:
         tool: str,
         args: dict[str, Any],
         *,
-        step_seq: int,
+        intent: int,
         speculative: bool,
         causation_id: str | None,
     ) -> dict[str, Any]:
@@ -264,7 +275,7 @@ class Conversation:
 
         async def run() -> dict[str, Any]:
             result = await self.runner.run(
-                ToolCall(call_id, tool, args), EffectContext(self.id, step_seq, speculative)
+                ToolCall(call_id, tool, args), EffectContext(self.id, intent, speculative)
             )
             payload = result.result if result.ok and result.result is not None else None
             payload = payload if payload is not None else {"error": result.error or "failed"}
@@ -470,7 +481,7 @@ class Conversation:
     async def resume_pending(self) -> None:
         """Re-run calls the policy allowed but whose result never reached the log.
 
-        The idempotency key derives from the proposal's seq, which is in the log, so a write that
+        The idempotency key derives from the call's intent, which is in the log, so a write that
         did land before the crash comes back from the ledger instead of running again.
         """
         for call in self.state.pending_calls():
@@ -481,7 +492,7 @@ class Conversation:
                 call.call_id,
                 call.tool,
                 dict(call.args),
-                step_seq=call.proposed_seq,
+                intent=call.intent,
                 speculative=False,
                 causation_id=None,
             )
@@ -536,6 +547,7 @@ class Runtime:
         knowledge_k: int = 3,
         max_llm_calls: int = 6,
         capture_content: bool = True,
+        request_detector: RequestDetector | None = None,
     ) -> None:
         self.clock = clock
         self.store = store
@@ -553,6 +565,7 @@ class Runtime:
         self.max_llm_calls = max_llm_calls
         # Record knowledge and memory text in the log, the system of record (see module doc).
         self.capture_content = capture_content
+        self.request_detector = request_detector or RequestDetector()
         self.conversations: dict[str, Conversation] = {}
         self.actors = ActorRuntime(self._actor, clock)
 

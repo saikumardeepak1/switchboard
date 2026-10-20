@@ -12,7 +12,7 @@ from switchboard.effects.runner import EffectContext, EffectRunner, ToolCall, To
 from switchboard.effects.spec import ToolRegistry
 from tests.effects.tools import Bench, build_bench
 
-CTX = EffectContext(conversation_id="conv_1", step_seq=4)
+CTX = EffectContext(conversation_id="conv_1", intent=4)
 REFUND = {"order_id": "48213", "amount": 12.5}
 
 

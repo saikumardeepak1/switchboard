@@ -109,7 +109,7 @@ Event catalog (type string, payload fields):
 | `leg.closed` | reason |
 | `turn.speculation_started` | turn_id, partial_text |
 | `turn.speculation_cancelled` | turn_id |
-| `turn.committed` | turn_id, text, endpointing_ms |
+| `turn.committed` | turn_id, text, endpointing_ms, requests (write tools newly asked for) |
 | `turn.backchannel` | text, utterance_id (said over agent speech; not a turn) |
 | `brain.routed` | turn_id, model_tier (`talker`/`thinker`), reason |
 | `tool.proposed` | call_id, tool, args |
@@ -229,7 +229,8 @@ list[MemoryWrite]` turns a finished conversation's events into memory writes.
 
 `ToolSpec(name, effect: read|write, params schema, idempotency: list[str], compensate: str | None)`.
 `EffectRunner.run(call, ctx) -> ToolResult` checks the ledger for the derived key, runs at most once,
-records, and returns the recorded result on repeat with `replayed=True`.
+records, and returns the recorded result on repeat with `replayed=True`. The key is conversation
+id, tool, identity arguments and the per-tool intent counter in `ctx.intent` (ADR-009 revision).
 
 ### brain
 
