@@ -153,18 +153,27 @@ def summarize(data: dict[str, dict[str, Any]], timings: dict[str, float]) -> str
             ],
         ),
         "",
-        "False blocks by category (tier 1 only):",
+        "False blocks on clean sentences by category:",
         "",
         markdown_table(
-            ["category", "clean sentences", "false blocks", "rate"],
+            ["category", "clean sentences", "tier 1 only", "rate", "with lexical scorer", "rate"],
             [
-                [k, v["sentences"] - v["corrupted"], v["false_blocks"], pct(v["false_block_rate"])]
+                [
+                    k,
+                    v["sentences"] - v["corrupted"],
+                    v["false_blocks"],
+                    pct(v["false_block_rate"]),
+                    v["scored_false_blocks"],
+                    pct(v["scored_false_block_rate"]),
+                ]
                 for k, v in g["by_category"].items()
             ],
         ),
         "",
         f"Tier 1 latency: p50 {g['tier1_latency_us']['p50']:.1f} us, "
         f"p99 {g['tier1_latency_us']['p99']:.1f} us. "
+        f"Tier 1 only escalations, failed closed with no verifier and counted as blocks: "
+        f"{pct(g['tier1_only']['escalated_share'])} of sentences. "
         f"Share of sentences needing tier 3 with the lexical scorer: "
         f"{pct(g['with_scorer']['tier3_share'])}.",
         "",
@@ -172,7 +181,7 @@ def summarize(data: dict[str, dict[str, Any]], timings: dict[str, float]) -> str
 
     s = data["speculation_latency"]["results"]["configs"]
     out += [
-        "## speculation_latency (voice to voice as the caller hears it)",
+        "## speculation_latency (voice to voice from TurnTimeline, end of speech to first audio)",
         "",
         markdown_table(
             [
@@ -180,6 +189,7 @@ def summarize(data: dict[str, dict[str, Any]], timings: dict[str, float]) -> str
                 "persona",
                 "v2v p50 ms",
                 "v2v p95 ms",
+                "caller-measured p50 ms",
                 "speculations",
                 "cancelled share",
                 "wasted output tokens",
@@ -190,6 +200,7 @@ def summarize(data: dict[str, dict[str, Any]], timings: dict[str, float]) -> str
                     c["persona"],
                     c["v2v_ms"]["p50"],
                     c["v2v_ms"]["p95"],
+                    c["caller_v2v_ms"]["p50"],
                     c["speculations_started"],
                     pct(c["wasted_speculation_ratio"]),
                     pct(c["wasted_output_token_ratio"]),

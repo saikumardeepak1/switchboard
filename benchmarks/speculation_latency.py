@@ -5,9 +5,12 @@ pauses mid-sentence, which is what makes speculation guess wrong), sweeping the 
 threshold. "off" sets the eager threshold equal to the end threshold, so `eager_end` never fires
 before `end` and every turn starts generating only at commit.
 
-Voice to voice is measured where the caller is: from the moment they stop speaking to the first
-agent audio chunk that reaches them. It is not taken from `TurnTimeline`, whose `first_audio_at`
-is the `speech.played` event, appended when an utterance finishes playing.
+Voice to voice comes from `TurnTimeline`, built from the log: end of the caller's speech (commit
+time minus endpointing wait) to the first TTS chunk sent to them (`speech.played.first_audio_at`).
+The caller's own measurement (end of what they said to the first agent audio that reached them)
+is reported next to it as a cross-check. The two agree to well under a millisecond per turn,
+except when the agent commits during a mid-sentence pause: the timeline counts that turn from
+the pause, the caller from the end of the whole sentence.
 
 Wasted generation: speculations cancelled over speculations started, and the share of model
 output tokens produced by calls that were cancelled.
@@ -39,7 +42,10 @@ def one(job: tuple[float | str, str, int]) -> dict[str, Any]:
     types = [e.type for e in result.events]
     usages = result.usages
     return {
-        "v2v": result.voice_to_voice_ms,
+        "v2v": [
+            t.voice_to_voice_ms for t in result.timeline.turns if t.voice_to_voice_ms is not None
+        ],
+        "caller_v2v": result.voice_to_voice_ms,
         "started": types.count("turn.speculation_started"),
         "cancelled": types.count("turn.speculation_cancelled"),
         "calls": len(usages),
@@ -64,6 +70,7 @@ def run(n: int | None = None, workers: int | None = None) -> dict[str, Any]:
         for p in PERSONA_NAMES:
             group = [r for (jt, jp, _), r in zip(jobs, rows, strict=True) if jt == t and jp == p]
             v2v = [v for r in group for v in r["v2v"]]
+            caller = [v for r in group for v in r["caller_v2v"]]
             started = sum(r["started"] for r in group)
             configs.append(
                 {
@@ -71,7 +78,10 @@ def run(n: int | None = None, workers: int | None = None) -> dict[str, Any]:
                     "persona": p,
                     "runs": len(group),
                     "turns": len(v2v),
+                    "v2v_source": "turn_timeline",
                     "v2v_ms": {"p50": pct(v2v, 50), "p95": pct(v2v, 95), "mean": mean(v2v)},
+                    "caller_turns": len(caller),
+                    "caller_v2v_ms": {"p50": pct(caller, 50), "p95": pct(caller, 95)},
                     "endpointing_ms_mean": mean([x for r in group for x in r["endpointing_ms"]]),
                     "speculations_started": started,
                     "speculations_cancelled": sum(r["cancelled"] for r in group),

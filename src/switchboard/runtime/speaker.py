@@ -3,6 +3,8 @@
 Each utterance gets a `PlaybackCursor` and a `BargeInPolicy`. When an utterance finishes playing
 the speaker appends `speech.played` with the full text; when the caller barges in it stops, clears
 the sink and appends `speech.played` with `interrupted=True` and only the text that was heard.
+Either way the event carries `first_audio_at`, when the first chunk was sent to the caller, which
+is where voice to voice ends (ADR-015).
 History is built from those events, so it never holds words the caller did not hear.
 
 Escalated sentences (ADR-005 tier 3) carry a verdict task. The speaker waits for the verdict only
@@ -54,14 +56,16 @@ class _Utterance:
     resumed: asyncio.Event = field(default_factory=asyncio.Event)
     unverified: list[asyncio.Task[GateDecision]] = field(default_factory=list)
     providers: list[str] = field(default_factory=list)
+    first_audio_at: float | None = None
 
     @property
     def provider(self) -> str | None:
         return "+".join(self.providers) or None
 
 
-# Called with (utterance_id, text_played, interrupted, tts_provider); appends speech.played.
-PlayedCallback = Callable[[str, str, bool, str | None], Awaitable[None]]
+# Called with (utterance_id, text_played, interrupted, tts_provider, first_audio_at); appends
+# speech.played.
+PlayedCallback = Callable[[str, str, bool, str | None, float | None], Awaitable[None]]
 # Called with (utterance_id, sentence); records a correction sentence as released speech.
 CorrectionCallback = Callable[[str, str], Awaitable[None]]
 
@@ -160,7 +164,7 @@ class Speaker:
         await self._io.sink.clear()
         for task in u.unverified:
             task.cancel()
-        await self._on_played(u.utterance_id, text, True, u.provider)
+        await self._on_played(u.utterance_id, text, True, u.provider, u.first_audio_at)
         self._idle.set()
         self.start()
         await self._on_barge_in()
@@ -223,6 +227,8 @@ class Speaker:
             u.cursor.enqueue(chunk.text, chunk.duration_s, now)
             if chunk.provider is not None and chunk.provider not in u.providers:
                 u.providers.append(chunk.provider)
+            if u.first_audio_at is None:
+                u.first_audio_at = now
             await self._io.sink.send(chunk)
 
     async def _finish(self, u: _Utterance) -> None:
@@ -241,7 +247,7 @@ class Speaker:
             await self._clock.sleep(remaining)
         self._utterance = None
         played = u.cursor.advance(self._clock.now())
-        await self._on_played(u.utterance_id, played, False, u.provider)
+        await self._on_played(u.utterance_id, played, False, u.provider, u.first_audio_at)
 
 
 async def _settled(verdict: asyncio.Task[GateDecision]) -> GateDecision | None:

@@ -256,7 +256,13 @@ class World:
     def backend(self) -> Any:
         return self.bundle.tools_module.backend
 
-    def new_runtime(self, *, ledger: InMemoryLedger | None = None, store: Any = None) -> Runtime:
+    def new_runtime(
+        self,
+        *,
+        ledger: InMemoryLedger | None = None,
+        store: Any = None,
+        day_start: float | None = None,
+    ) -> Runtime:
         return Runtime(
             clock=self.clock,
             store=store if store is not None else self.store,
@@ -268,6 +274,7 @@ class World:
             facts=self.facts,
             dialer=self.dialer,
             admission=self.admission,
+            day_start=day_start,
         )
 
     async def start(self, runtime: Runtime | None = None) -> Conversation:

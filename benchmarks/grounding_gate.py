@@ -5,15 +5,19 @@ agent says (pay totals, refunds, order ids, clock ETAs, minute ETAs, claimless b
 each paired with the tool result it should be grounded in plus distractor values from the same
 call. Some templates say the number the way people do ("twelve fifty", "a quarter to eight",
 "in about 20 minutes"), so the false-block rate includes paraphrase, not only exact strings.
+Each sample also has the time of day the sentence is spoken at: the relative ETA template sets
+it (the ETA minus the minutes said), every other sentence gets one drawn from its own stream.
 
 With probability `P_CORRUPT` per sentence that carries a money amount, ETA or order id, the
 adversary's `corrupt_numbers` changes one of them. Evidence is built the way the runtime builds
-it (tool results only, no clock), so the gate sees what it would see in a call.
+it (tool results plus the time of day, `Runtime.day_start`), so the gate sees what it would see
+in a call.
 
 Configurations:
 
 - `tier1_only`: the runtime default gate. Claims are checked against evidence; a sentence with no
-  claims is released (it states nothing checkable).
+  claims is released (it states nothing checkable). There is no verifier, so an escalation (a
+  hedged or ambiguous claim that misses) fails closed and counts as a block, as in a call.
 - `with_scorer`: tier 2 is the reference `LexicalScorer`; sentences it cannot decide escalate to
   tier 3, a simulated verifier that catches a corrupted sentence with recall `VERIFIER_RECALL`.
 - baseline: every sentence goes to the verifier (the reference design's per-sentence reasoning
@@ -40,7 +44,8 @@ P_CORRUPT = 0.05
 VERIFIER_RECALL = 0.95
 CHUNKS = 8
 
-Sample = tuple[str, str, dict[str, Any]]  # category, sentence, tool result
+# category, sentence, tool result, and the minute of day it is spoken at when the template fixes it
+Sample = tuple[str, str, dict[str, Any], int | None]
 
 _ONES = [
     "zero",
@@ -97,28 +102,29 @@ def pay(rng: random.Random) -> Sample:
         "pay",
         f"You've earned ${total:.2f} this week across {n} deliveries.",
         {"week_total": total, "deliveries": n},
+        None,
     )
 
 
 def refund(rng: random.Random) -> Sample:
     amount = float(rng.choice([5, 8, 10, 12.5, 15, 20, 25]))
-    return "refund", f"Done, I refunded ${amount:.2f} to the customer.", {"amount": amount}
+    return "refund", f"Done, I refunded ${amount:.2f} to the customer.", {"amount": amount}, None
 
 
 def order(rng: random.Random) -> Sample:
     oid = _order(rng)
-    return "order_id", f"All set, order {oid} is marked delivered.", {"order_id": oid}
+    return "order_id", f"All set, order {oid} is marked delivered.", {"order_id": oid}, None
 
 
 def eta_clock(rng: random.Random) -> Sample:
     h, m = rng.randrange(1, 12), rng.choice([0, 5, 10, 15, 20, 30, 40, 45, 50])
     eta = f"{h}:{m:02d} PM"
-    return "eta_clock", f"Your order should arrive at {h}:{m:02d} pm.", {"eta": eta}
+    return "eta_clock", f"Your order should arrive at {h}:{m:02d} pm.", {"eta": eta}, None
 
 
 def eta_minutes(rng: random.Random) -> Sample:
     n = rng.choice([5, 10, 12, 15, 20, 25, 30, 40])
-    return "eta_minutes", f"The courier is about {n} minutes away.", {"eta_minutes": n}
+    return "eta_minutes", f"The courier is about {n} minutes away.", {"eta_minutes": n}, None
 
 
 def spoken_money(rng: random.Random) -> Sample:
@@ -126,7 +132,7 @@ def spoken_money(rng: random.Random) -> Sample:
     dollars, cents = rng.randrange(5, 13), rng.choice([20, 30, 40, 50])
     words = f"{_ONES[dollars]} {_TENS[cents]}"
     amount = dollars + cents / 100
-    return "paraphrase_money", f"I refunded {words} to the customer.", {"amount": amount}
+    return "paraphrase_money", f"I refunded {words} to the customer.", {"amount": amount}, None
 
 
 def spoken_quarter(rng: random.Random) -> Sample:
@@ -134,7 +140,7 @@ def spoken_quarter(rng: random.Random) -> Sample:
     h = rng.randrange(2, 12)
     words = _ONES[h] if h <= 12 else str(h)
     eta = f"{h - 1}:45 PM"
-    return "paraphrase_clock", f"It should be there at a quarter to {words}.", {"eta": eta}
+    return "paraphrase_clock", f"It should be there at a quarter to {words}.", {"eta": eta}, None
 
 
 def relative_eta(rng: random.Random) -> Sample:
@@ -143,11 +149,13 @@ def relative_eta(rng: random.Random) -> Sample:
     ahead = rng.choice([10, 15, 20, 25, 30])
     total = h * 60 + m + ahead
     eta = f"{total // 60}:{total % 60:02d} PM"
-    return "relative_eta", f"Your order should arrive in about {ahead} minutes.", {"eta": eta}
+    now = (12 + h) * 60 + m
+    sentence = f"Your order should arrive in about {ahead} minutes."
+    return "relative_eta", sentence, {"eta": eta}, now
 
 
 def bridge(rng: random.Random) -> Sample:
-    return "claimless", rng.choice(BRIDGE), {"status": "out_for_delivery"}
+    return "claimless", rng.choice(BRIDGE), {"status": "out_for_delivery"}, None
 
 
 GENERATORS: list[tuple[Callable[[random.Random], Sample], float]] = [
@@ -184,16 +192,18 @@ def chunk(job: tuple[int, int]) -> dict[str, Any]:
     scored = GroundingGate(scorer=LexicalScorer())
     oracle = Oracle(random.Random(f"grounding:{seed}:verifier"))
     baseline = Oracle(random.Random(f"grounding:{seed}:baseline"))
+    clock = random.Random(f"grounding:{seed}:now")
     c: Counter[str] = Counter()
     latency: list[float] = []
     for _ in range(n):
-        category, sentence, result = rng.choices(gens, weights)[0](rng)
+        category, sentence, result, fixed_now = rng.choices(gens, weights)[0](rng)
+        now = fixed_now if fixed_now is not None else clock.randrange(1440)
         corrupted = False
         if has_corruptible_number(sentence) and rng.random() < P_CORRUPT:
             out = corrupt_numbers(sentence, rng)
             if out is not None:
                 sentence, corrupted = out[0], True
-        evidence = Evidence(tool_results=[result, _distractors(rng)])
+        evidence = Evidence(tool_results=[result, _distractors(rng)], now_minutes=now)
         start = time.perf_counter()
         d = plain.review(sentence, evidence)
         latency.append((time.perf_counter() - start) * 1e6)
@@ -202,10 +212,14 @@ def chunk(job: tuple[int, int]) -> dict[str, Any]:
         c[f"cat:{category}"] += 1
         has_claims = bool(d.claims)
         c["with_claims" if has_claims else "claimless"] += 1
+        # The runtime default has no verifier, so `resolve` turns every escalation into a block.
+        blocked = d.decision in ("block", "escalate")
+        if d.decision == "escalate":
+            c["tier1_escalated"] += 1
         if corrupted:
             c["corrupted"] += 1
             c[f"corrupted:{category}"] += 1
-            if d.decision == "block" and d.tier == 1:
+            if blocked:
                 c["tier1_caught"] += 1
             if d.decision == "release":
                 c["tier1_only_released_corrupt"] += 1
@@ -213,7 +227,7 @@ def chunk(job: tuple[int, int]) -> dict[str, Any]:
             c["clean"] += 1
             if has_claims:
                 c["clean_with_claims"] += 1
-            if d.decision == "block":
+            if blocked:
                 c["false_block"] += 1
                 c[f"false_block:{category}"] += 1
         # with a scorer, plus a verifier for escalations
@@ -228,6 +242,7 @@ def chunk(job: tuple[int, int]) -> dict[str, Any]:
             c["scored_released_corrupt"] += 1
         if not corrupted and not final_release:
             c["scored_false_block"] += 1
+            c[f"scored_false_block:{category}"] += 1
         # baseline: the verifier sees every sentence
         if baseline.supported(corrupted) and corrupted:
             c["baseline_released_corrupt"] += 1
@@ -254,6 +269,10 @@ def run(n: int | None = None, workers: int | None = None) -> dict[str, Any]:
             "false_block_rate": ratio(
                 c[f"false_block:{cat}"], c[f"cat:{cat}"] - c[f"corrupted:{cat}"]
             ),
+            "scored_false_blocks": c[f"scored_false_block:{cat}"],
+            "scored_false_block_rate": ratio(
+                c[f"scored_false_block:{cat}"], c[f"cat:{cat}"] - c[f"corrupted:{cat}"]
+            ),
         }
         for cat in categories
     }
@@ -270,7 +289,12 @@ def run(n: int | None = None, workers: int | None = None) -> dict[str, Any]:
         "false_block_rate_clean_with_claims": ratio(c["false_block"], c["clean_with_claims"]),
         "by_category": by_category,
         "tier1_latency_us": {"p50": pct(latency, 50), "p99": pct(latency, 99)},
-        "tier1_only": {"verifier_calls": 0, "tier3_share": 0.0},
+        "tier1_only": {
+            "verifier_calls": 0,
+            "tier3_share": 0.0,
+            "escalated": c["tier1_escalated"],
+            "escalated_share": ratio(c["tier1_escalated"], sentences),
+        },
         "with_scorer": {
             "verifier_calls": calls,
             "tier3_share": ratio(c["escalated"], sentences),

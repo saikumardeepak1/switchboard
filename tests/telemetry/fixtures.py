@@ -56,7 +56,14 @@ def conv_a_events() -> list[AnyEvent]:
             tier=1,
             claims=[{"kind": "time", "raw": "7:45 pm"}],
         ),
-        SpeechPlayed(**b(c, 1.9), utterance_id="u1", text_played="It arrives at", interrupted=True),
+        # Played events land when playback ends; first audio is the moment TTS reached the caller.
+        SpeechPlayed(
+            **b(c, 1.95),
+            utterance_id="u1",
+            text_played="It arrives at",
+            interrupted=True,
+            first_audio_at=1.9,
+        ),
         # Courier child leg, interleaved in time with the customer leg.
         LegOpened(
             **b(c, 2.0, "leg_k"),
@@ -78,7 +85,11 @@ def conv_a_events() -> list[AnyEvent]:
             result={"error": "timeout"},
         ),
         SpeechPlayed(
-            **b(c, 3.5, "leg_k"), utterance_id="uk", text_played="One moment.", interrupted=False
+            **b(c, 3.9, "leg_k"),
+            utterance_id="uk",
+            text_played="One moment.",
+            interrupted=False,
+            first_audio_at=3.5,
         ),
         ChildResult(**b(c, 4.0), child_leg_id="leg_k", result={"confirmed": True}),
         # turn_2: endpointing 400, router 20, brain first 80, audio at +600, voice-to-voice 1000.
@@ -111,7 +122,11 @@ def conv_a_events() -> list[AnyEvent]:
             claims=[],
         ),
         SpeechPlayed(
-            **b(c, 5.6), utterance_id="u2", text_played="Let me get a colleague.", interrupted=False
+            **b(c, 5.65),
+            utterance_id="u2",
+            text_played="Let me get a colleague.",
+            interrupted=False,
+            first_audio_at=5.6,
         ),
         HandoffRequested(**b(c, 5.7), reason="refund over limit"),
         LegClosed(**b(c, 6.0, "leg_k"), reason="completed"),

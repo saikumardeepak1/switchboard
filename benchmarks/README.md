@@ -70,12 +70,18 @@ the baseline is, if anything, flattered.
 minute ETAs, claimless bridge speech) each paired with its tool result and distractor values.
 Some templates say numbers the way people do: "twelve fifty", "a quarter to eight", "in about 20
 minutes". 5% of sentences that carry a money amount, ETA or order id get one value corrupted.
-Evidence is built the way the runtime builds it: tool results only, no current time.
+Evidence is built the way the runtime builds it: tool results plus the time of day the sentence
+is spoken at (`Runtime.day_start`, ADR-005 Revision). The relative ETA template fixes that time
+(the ETA minus the minutes said); every other sentence draws one from a separate stream, so the
+corpus itself is unchanged.
 
-Configurations: the runtime default gate (tier 1 only; a sentence with no claims is released),
-the gate with the reference `LexicalScorer` as tier 2 plus a simulated tier 3 verifier, and the
-baseline that sends every sentence to tier 3. The simulated verifier is an oracle with recall
-0.95 and no false positives, which favours the baseline and the tier 3 path.
+Configurations: the runtime default gate (tier 1 only; a sentence with no claims is released;
+there is no verifier, so an escalation fails closed and is counted as a block), the gate with the
+reference `LexicalScorer` as tier 2 plus a simulated tier 3 verifier, and the baseline that sends
+every sentence to tier 3. Tier 2 scores only claimless sentences that make a factual assertion (a
+capitalized word not opening the sentence, or a policy word such as refund or deliver); other
+filler releases unscored. The simulated verifier is an oracle with recall 0.95 and no false
+positives, which favours the baseline and the tier 3 path.
 
 Limits: this is a gate-level benchmark, not a call-level one. The corpus is template generated,
 so the paraphrase categories are only as varied as the templates.
@@ -86,8 +92,12 @@ The happy delivery call, 40 seeds per cell, under a clean speaker and a slow spe
 mid-sentence, sweeping the bundle's eager threshold from 0.3 to 0.7 and "off" (eager threshold
 equal to the end threshold, so nothing starts before the turn commits).
 
-Voice to voice is measured at the caller: from the end of their speech to the first agent audio
-chunk that reaches them. Wasted generation is reported two ways: speculations cancelled over
+Voice to voice comes from `TurnTimeline`: from the end of the caller's speech (commit time minus
+the endpointing wait) to the first TTS chunk sent to them (`speech.played.first_audio_at`). The
+caller's own measurement, from the end of what they said to the first agent audio that reached
+them, is reported beside it as a cross-check. They agree per turn to well under a millisecond,
+except when the agent commits during a mid-sentence pause: the timeline then counts a turn from
+the pause, which the caller does not, so slow-speaker percentiles differ by about 1 ms. Wasted generation is reported two ways: speculations cancelled over
 started, and model output tokens produced by calls that were later cancelled.
 
 Configured latencies: model time to first token lognormal (thinker p50 0.35 s, p95 0.8 s;
@@ -141,31 +151,37 @@ shorter than a production agent's, so the LLM share here is a floor.
 
 ## Findings worth reading before the numbers
 
-These come out of the committed run. They are reported as measured, not tuned away.
+These come out of the committed run. They are reported as measured, not tuned away. The results
+committed before this run predated the review fixes (cost and slow-speaker latency had already
+moved on the code they were committed with), so compare against this run, not that one.
 
-1. **Relative ETAs are always blocked.** "Your order should arrive in about 20 minutes" against a
-   tool result that says 7:45 PM is blocked 100% of the time by tier 1. `Evidence` can derive
-   durations from clock times when given `now_minutes`, but the runtime builds evidence without
-   it. ADR-005 counts "in 20 minutes" among the handled forms; at call level it is not.
-2. **The reference lexical scorer is not usable as tier 2.** It blocks about two thirds of
-   claimless bridge speech, because bridge sentences share few words with tool results. The
-   runtime default (no scorer) does not have this problem; nobody should switch the lexical
-   scorer on as is.
+1. **Relative ETAs ground only when the runtime knows the time of day.** "Your order should
+   arrive in about 20 minutes" against a tool result that says 7:45 PM was blocked 100% of the
+   time, because the runtime built evidence with no current time. With `Runtime.day_start` set
+   (the simulator sets it) there are no false blocks in that category. `day_start` defaults to
+   None because `RealClock` is monotonic and has no date; a deployment that leaves it unset still
+   fails these sentences closed.
+2. **The lexical scorer is now harmless, not useful.** It blocked about two thirds of claimless
+   bridge speech. Tier 2 now scores only sentences that assert something (a name, or a policy
+   word like refund), so filler releases unscored and false blocks with the scorer drop to 0;
+   3.3% of sentences go to the verifier. Whether the scorer catches anything a verifier would not
+   is untested: the corpus has no claimless corrupted sentences, so this benchmark cannot show a
+   tier 2 catch.
 3. **Hybrid endpointing is not faster than a fixed timer here; it is safer.** With bare partials
    its mean end latency is close to the 800 ms timer, because its adaptive pause scale grows for
    callers who pause, but it cuts callers off far less often. ADR-007 motivates the hybrid partly
    by the latency of fixed timeouts; in this simulation the win is premature cutoffs, not latency.
    A text-only rule is much faster when transcripts are clean and loses its edge once final
    punctuation is noisy.
-4. **`TurnTimeline` voice to voice is not voice to voice.** It times to the first `speech.played`
-   event, which is appended when an utterance finishes playing, so it reports about 1.3 to 3.5 s
-   where the caller hears the first audio after about 0.65 to 0.9 s. It also leaves `model_tier`
-   empty for every speculative turn, because `brain.routed` precedes `turn.committed`. The
-   speculation benchmark measures at the caller for this reason.
+4. **`TurnTimeline` voice to voice now is voice to voice.** It used to end at the first
+   `speech.played` event, which is appended when an utterance finishes playing, and reported 1.3
+   to 3.5 s where the caller heard audio after 0.65 to 0.9 s. It now ends at
+   `speech.played.first_audio_at`, and speculative turns keep their routing tier and what they did
+   before the commit. The speculation benchmark reads the timeline.
 5. **Caching matters more than routing at these prices.** About a third of turns go to the
-   talker in the chatty call. Routing cuts the per-minute total by about 7% (0.074 to 0.069 $/min
-   with a cold cache per call); a warm shared prefix against no caching moves it by about 17 to
-   21%. Telephony, STT and TTS stay the majority of per-minute cost either way, and the scripted
+   talker in the chatty call. Routing cuts the per-minute total by about 3% (0.0747 to 0.0727
+   $/min with a cold cache per call); a warm shared prefix against no caching moves it by about 16
+   to 20%. Telephony, STT and TTS stay the majority of per-minute cost either way, and the scripted
    prompts are short, so a production agent's LLM share would be larger.
 
 ## Reproducing

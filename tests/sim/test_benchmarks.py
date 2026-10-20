@@ -38,6 +38,16 @@ def test_grounding_gate_reports_catch_and_false_block_rates() -> None:
     assert r["with_scorer"]["verifier_calls"] <= r["sentences"]
 
 
+def test_grounding_gate_tier1_only_fails_escalations_closed_like_the_runtime() -> None:
+    r = grounding_gate.run(n=4000, workers=1)["results"]
+    # With no verifier every escalation ends as a block, so nothing is left undecided.
+    assert r["tier1_only"]["escalated"] > 0
+    assert r["tier1_caught"] + r["tier1_only_released_corrupt"] == r["corrupted"]
+    eta = r["by_category"]["eta_minutes"]
+    assert eta["corrupted"] > 0
+    assert "scored_false_block_rate" in r["by_category"]["claimless"]
+
+
 def test_speculation_latency_sweeps_the_eager_threshold() -> None:
     data = speculation_latency.run(n=2, workers=1)
     rows = data["results"]["configs"]
@@ -45,6 +55,11 @@ def test_speculation_latency_sweeps_the_eager_threshold() -> None:
     off = next(row for row in rows if row["eager_threshold"] == "off")
     assert off["speculations_started"] == 0
     assert all(row["v2v_ms"]["p50"] is not None for row in rows)
+    # Voice to voice comes from TurnTimeline; the caller's own measurement cross-checks it.
+    clean = [row for row in rows if row["persona"] == "clean"]
+    for row in clean:
+        assert row["v2v_source"] == "turn_timeline"
+        assert abs(row["v2v_ms"]["p50"] - row["caller_v2v_ms"]["p50"]) < 1.0
 
 
 def test_endpointing_compares_three_controllers() -> None:
@@ -105,3 +120,27 @@ async def test_serve_populates_a_store_the_api_can_read() -> None:
     body = client.get(f"/v1/conversations/{ids[0]}").json()
     assert body["timeline"]["turns"]
     assert client.get("/v1/activity", params={"conversation_id": ids[1]}).json()["items"]
+
+
+async def test_serve_prints_an_activity_url_whose_token_reads_the_demo_calls() -> None:
+    from fastapi.testclient import TestClient
+
+    from benchmarks.serve import prepare
+
+    app, lines = await prepare("127.0.0.1", 8000, calls=1, token="demo-token")
+    assert "http://127.0.0.1:8000/activity#token=demo-token" in lines
+    client = TestClient(app)
+    assert client.get("/v1/activity").status_code == 401
+    authed = client.get("/v1/activity", headers={"Authorization": "Bearer demo-token"})
+    assert authed.status_code == 200 and authed.json()["items"]
+
+
+async def test_serve_makes_a_fresh_token_when_none_is_given() -> None:
+    from benchmarks.serve import prepare
+
+    _, first = await prepare("127.0.0.1", 8000, calls=1)
+    _, second = await prepare("127.0.0.1", 8000, calls=1)
+    url = next(line for line in first if "#token=" in line)
+    token = url.split("#token=", 1)[1]
+    assert len(token) >= 20
+    assert url not in second

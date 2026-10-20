@@ -234,11 +234,13 @@ class Conversation:
         return graph.open_steps(ProcedureState(self.state.procedure_done(graph)))
 
     def grounding_evidence(self) -> Evidence:
+        """The gate's evidence, with the time of day from the clock when the runtime knows it."""
+        now = self.runtime.minute_of_day(self.clock.now())
         if self.runtime.capture_content:
             # Kept current as events are appended, and exactly what replay rebuilds.
-            return self.state.grounding_evidence()
+            return self.state.grounding_evidence().at(now)
         # The log lacks the text, so merge in what this process holds. Costs the index size.
-        return self.state.grounding_evidence().union(self._unlogged)
+        return self.state.grounding_evidence().union(self._unlogged).at(now)
 
     async def load_memory(self) -> None:
         """Read memory once at setup and record what was read (ADR-011)."""
@@ -709,6 +711,7 @@ class Runtime:
         capture_content: bool = True,
         request_detector: RequestDetector | None = None,
         end_write_timeout_s: float = 10.0,
+        day_start: float | None = None,
     ) -> None:
         self.clock = clock
         self.store = store
@@ -729,11 +732,28 @@ class Runtime:
         self.request_detector = request_detector or RequestDetector()
         # How long ending a conversation waits for tool calls already running.
         self.end_write_timeout_s = end_write_timeout_s
+        # Any clock reading that falls on a local midnight. See `minute_of_day`.
+        self.day_start = day_start
         self.conversations: dict[str, Conversation] = {}
         self.actors = ActorRuntime(self._actor, clock)
 
     def _actor(self, key: str) -> Conversation:
         return self.conversations[key]
+
+    def minute_of_day(self, now: float) -> int | None:
+        """Local minute of the day for a clock reading, or None when the clock has no date.
+
+        A `Clock` reads seconds from an arbitrary origin, so the runtime needs one anchor:
+        `day_start`, any clock reading that falls on a local midnight. The time of day is then
+        `(now - day_start) mod 24 h`. For a clock that reads Unix time this is minus the tenant's
+        UTC offset (25200.0 for UTC-7); the simulator sets it from its start timestamp. The
+        default, None, assumes nothing: `RealClock` is monotonic and carries no time of day, so
+        the gate gets no "now" and relative durations ("in about 20 minutes") are only checked
+        against explicit durations in the evidence, which fails closed (ADR-005).
+        """
+        if self.day_start is None:
+            return None
+        return int((now - self.day_start) // 60) % 1440
 
     async def start(
         self,

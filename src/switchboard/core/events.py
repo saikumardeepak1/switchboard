@@ -143,6 +143,9 @@ class SpeechPlayed(Event):
     # The TTS provider that served the utterance, "+"-joined if it changed between sentences.
     # None when the TTS in use does not report one.
     tts_provider: str | None = None
+    # Clock time the utterance's first audio chunk was sent to the caller, the end point of
+    # voice to voice. `at` is when playback ended. None if no audio went out.
+    first_audio_at: float | None = None
 
 
 class ProcedureAdvanced(Event):

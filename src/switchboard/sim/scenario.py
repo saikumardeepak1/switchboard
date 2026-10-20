@@ -51,6 +51,8 @@ from switchboard.turn import EndpointingConfig
 # An eager threshold equal to the end threshold never fires before `end`: speculation off.
 SPECULATION_OFF = EndpointingConfig().end_threshold
 DEFAULT_START = parse_timestamp("2026-10-20T11:30:00-07:00")
+# The simulated tenant is in UTC-7, so its local midnight anchors the time of day (ADR-005).
+DEFAULT_DAY_START = parse_timestamp("2026-10-20T00:00:00-07:00")
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,7 @@ class SimConfig:
     cache_mode: CacheMode = "auto"
     gate_factory: Callable[[], GroundingGate] | None = None
     start_at: float = DEFAULT_START
+    day_start: float | None = DEFAULT_DAY_START
     max_timer_steps: int = 400_000
 
 
@@ -170,6 +173,7 @@ class World:
             memory=self.memory,
             facts=self.facts,
             dialer=self.dialer,
+            day_start=self.scenario.config.day_start,
         )
 
     async def start(self) -> Conversation:

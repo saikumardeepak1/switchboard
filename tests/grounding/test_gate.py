@@ -7,10 +7,13 @@ from switchboard.grounding.gate import (
     SentenceScorer,
     Verifier,
     VerifierVerdict,
+    makes_assertion,
     rewrite_hint,
 )
 from switchboard.grounding.scorer import LexicalScorer
 
+# Claimless, but a factual assertion: tier 2 scores it.
+ASSERTION = "The courier delivered your package."
 EVIDENCE = Evidence(tool_results=[{"refund": 12.5, "eta": "7:52 pm"}], now_minutes=19 * 60 + 30)
 
 
@@ -97,15 +100,64 @@ def test_claimless_without_scorer_releases_at_tier_two() -> None:
 )
 def test_tier_two_thresholds(score: float, expected: str) -> None:
     gate = GroundingGate(scorer=FixedScorer(score))
-    decision = gate.review("Your package is with the courier.", EVIDENCE)
+    decision = gate.review(ASSERTION, EVIDENCE)
     assert decision.tier == 2
     assert decision.decision == expected
     assert decision.score == score
 
 
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Thanks Sam, you're verified.",
+        "It went out from the Ballard store.",
+        "I refunded the customer.",
+        "Your order was delivered.",
+        "We cancelled it for you.",
+        "You were charged twice.",
+        "The refund is on its way.",
+        "Okay. It went to Seattle.",
+    ],
+)
+def test_a_name_or_a_policy_verb_makes_a_factual_assertion(sentence: str) -> None:
+    assert makes_assertion(sentence)
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "One moment.",
+        "Let me check that for you.",
+        "I'm calling the customer now, please stay on the line.",
+        "Sorry, could you say that again?",
+        "I'll stay on the line with you, I promise.",
+        "Okay. Let me look.",
+        "Thanks for your patience!",
+    ],
+)
+def test_filler_makes_no_factual_assertion(sentence: str) -> None:
+    assert not makes_assertion(sentence)
+
+
+def test_claimless_filler_releases_without_asking_the_scorer() -> None:
+    scorer = FixedScorer(0.0)
+    decision = GroundingGate(scorer=scorer).review("Let me check that for you.", EVIDENCE)
+    assert decision.decision == "release"
+    assert decision.tier == 2
+    assert decision.score is None
+    assert scorer.calls == 0
+
+
+def test_claimless_assertion_still_goes_to_the_scorer() -> None:
+    scorer = FixedScorer(0.0)
+    decision = GroundingGate(scorer=scorer).review("Thanks Sam, you're verified.", EVIDENCE)
+    assert decision.decision == "block"
+    assert scorer.calls == 1
+
+
 def test_custom_thresholds() -> None:
     gate = GroundingGate(scorer=FixedScorer(0.6), release_at=0.5, block_at=0.1)
-    assert gate.review("It is with the courier.", EVIDENCE).decision == "release"
+    assert gate.review(ASSERTION, EVIDENCE).decision == "release"
 
 
 @pytest.mark.parametrize(("release_at", "block_at"), [(0.3, 0.5), (1.5, 0.2), (0.8, -0.1)])
@@ -117,11 +169,11 @@ def test_invalid_thresholds_rejected(release_at: float, block_at: float) -> None
 def test_scorer_out_of_range_rejected() -> None:
     gate = GroundingGate(scorer=FixedScorer(1.2))
     with pytest.raises(ValueError):
-        gate.review("It is with the courier.", EVIDENCE)
+        gate.review(ASSERTION, EVIDENCE)
 
 
 def test_tier_two_block_has_generic_hint() -> None:
-    decision = GroundingGate(scorer=FixedScorer(0.0)).review("It is with the courier.", EVIDENCE)
+    decision = GroundingGate(scorer=FixedScorer(0.0)).review(ASSERTION, EVIDENCE)
     hint = rewrite_hint(decision)
     assert hint is not None
     assert "evidence" in hint
@@ -140,7 +192,7 @@ async def test_resolve_passes_through_non_escalations() -> None:
 async def test_resolve_escalation_with_verifier(supported: bool, expected: str) -> None:
     verifier = FixedVerifier(supported)
     gate = GroundingGate(scorer=FixedScorer(0.5), verifier=verifier)
-    sentence = "It is with the courier."
+    sentence = ASSERTION
     escalated = gate.review(sentence, EVIDENCE)
     assert escalated.decision == "escalate"
     resolved = await gate.resolve(escalated, sentence, EVIDENCE)
@@ -152,7 +204,7 @@ async def test_resolve_escalation_with_verifier(supported: bool, expected: str) 
 
 async def test_resolve_without_verifier_fails_closed() -> None:
     gate = GroundingGate(scorer=FixedScorer(0.5))
-    sentence = "It is with the courier."
+    sentence = ASSERTION
     resolved = await gate.resolve(gate.review(sentence, EVIDENCE), sentence, EVIDENCE)
     assert resolved.decision == "block"
     assert resolved.tier == 3

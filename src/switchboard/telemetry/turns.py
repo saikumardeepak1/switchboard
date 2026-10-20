@@ -1,23 +1,31 @@
 """Per-turn latency decomposition (ADR-015), derived purely from a conversation's events.
 
-A turn starts at `turn.committed` and owns the events that follow it on the same leg until the
-next commit on that leg. Events with no leg attach to the most recent turn. Policy verdicts and
-tool results attach by `call_id` to the turn that proposed the call, even if they land after a
-later commit. Time zero for a turn is the end of the caller's speech: `committed_at -
-endpointing_ms`.
+A turn is a `turn.committed`. An event belongs to the turn whose anchor it was caused by (the
+commit, or for a speculative turn the `turn.speculation_started` event, ADR-006), so routing,
+gated sentences and read-only tool calls a speculation made before its commit count for that
+turn. `speech.played` belongs to the turn its utterance id names (`<turn_id>/...`). Anything else
+attaches to the latest commit on its leg, and events with no leg to the most recent turn. Policy
+verdicts and tool results attach by `call_id` to the turn that proposed the call, even if they
+land after a later commit. A cancelled speculation is not a turn, and what it caused is dropped.
+Time zero for a turn is the end of the caller's speech: `committed_at - endpointing_ms`.
 
 Measured per turn (all milliseconds):
 
 | field                  | from                          | to                                 |
 |------------------------|-------------------------------|------------------------------------|
 | endpointing_ms         | `turn.committed` payload      |                                    |
-| router_ms              | commit                        | `brain.routed` for this turn_id    |
+| router_ms              | commit (speculation start)    | `brain.routed` for this turn_id    |
 | brain_first_output_ms  | routed (or commit if none)    | first `tool.proposed` or gated sentence |
 | policy_ms (per tool)   | `tool.proposed`               | `policy.verdict`                   |
 | duration_ms (per tool) | `tool.proposed`               | `tool.executed`                    |
-| first_audio_ms         | commit                        | first `speech.played`              |
-| release_to_audio_ms    | first released sentence       | first `speech.played` (TTS first audio) |
-| voice_to_voice_ms      | end of caller speech          | first `speech.played`              |
+| first_audio_ms         | commit                        | first audio out                    |
+| release_to_audio_ms    | first released sentence       | first audio out                    |
+| voice_to_voice_ms      | end of caller speech          | first audio out                    |
+
+First audio out is the earliest `speech.played.first_audio_at` of the turn: when the speaker sent
+the first TTS chunk to the caller. The event itself is appended when the utterance stops playing,
+so its `at` is not used. A log written before the field existed has no first audio time, and
+those turns report no voice to voice rather than the end of playback.
 
 Span attribute mapping. OpenTelemetry GenAI semantic convention names are used where one exists;
 the rest live under `switchboard.*`:
@@ -65,6 +73,8 @@ from switchboard.core.events import (
     ToolExecuted,
     ToolProposed,
     TurnCommitted,
+    TurnSpeculationCancelled,
+    TurnSpeculationStarted,
 )
 
 AttrValue = str | int | float | bool | list[str]
@@ -135,14 +145,21 @@ class TurnLatency:
     interrupted: bool
     tools: tuple[ToolTiming, ...]
     text: str
+    # When generation started on an eager end of turn, for a turn that committed a speculation.
+    speculation_started_at: float | None = None
 
     @property
     def speech_end_at(self) -> float:
         return self.committed_at - self.endpointing_ms / 1000.0
 
     @property
+    def speculative(self) -> bool:
+        return self.speculation_started_at is not None
+
+    @property
     def router_ms(self) -> float | None:
-        return _ms(self.committed_at, self.routed_at)
+        start = self.speculation_started_at
+        return _ms(self.committed_at if start is None else start, self.routed_at)
 
     @property
     def brain_first_output_ms(self) -> float | None:
@@ -193,6 +210,7 @@ class TurnLatency:
             "speech_end_at": self.speech_end_at,
             "endpointing_ms": self.endpointing_ms,
             "model_tier": self.model_tier,
+            "speculative": self.speculative,
             "router_ms": self.router_ms,
             "brain_first_output_ms": self.brain_first_output_ms,
             "first_output_kind": self.first_output_kind,
@@ -212,19 +230,30 @@ class TurnLatency:
 
 @dataclass
 class _TurnBuilder:
-    commit: TurnCommitted
     party: str | None
+    commit: TurnCommitted | None = None
+    speculation_started_at: float | None = None
     routed: BrainRouted | None = None
     first_output: tuple[float, Literal["tool", "text"]] | None = None
     gated: list[GatedSentence] = field(default_factory=list)
     played: SpeechPlayed | None = None
+    first_audio_at: float | None = None
     tools: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def output(self, at: float, kind: Literal["tool", "text"]) -> None:
         if self.first_output is None:
             self.first_output = (at, kind)
 
+    def heard(self, e: SpeechPlayed) -> None:
+        if self.played is None:
+            self.played = e
+        if e.first_audio_at is not None and (
+            self.first_audio_at is None or e.first_audio_at < self.first_audio_at
+        ):
+            self.first_audio_at = e.first_audio_at
+
     def build(self) -> TurnLatency:
+        assert self.commit is not None
         return TurnLatency(
             turn_id=self.commit.turn_id,
             leg_id=self.commit.leg_id,
@@ -237,10 +266,11 @@ class _TurnBuilder:
             first_output_at=self.first_output[0] if self.first_output else None,
             first_output_kind=self.first_output[1] if self.first_output else None,
             gated=tuple(self.gated),
-            first_audio_at=self.played.at if self.played else None,
+            first_audio_at=self.first_audio_at,
             interrupted=self.played.interrupted if self.played else False,
             tools=tuple(ToolTiming(**t) for t in self.tools.values()),
             text=self.commit.text,
+            speculation_started_at=self.speculation_started_at,
         )
 
 
@@ -264,6 +294,7 @@ class TurnTimeline:
         builders: list[_TurnBuilder] = []
         by_leg: dict[str | None, _TurnBuilder] = {}
         by_turn_id: dict[str, _TurnBuilder] = {}
+        by_anchor: dict[str, _TurnBuilder] = {}
         by_call: dict[str, _TurnBuilder] = {}
         parties: dict[str, str] = {}
         last: _TurnBuilder | None = None
@@ -272,11 +303,26 @@ class TurnTimeline:
             if isinstance(e, LegOpened) and e.leg_id is not None:
                 parties[e.leg_id] = e.party
                 continue
+            if isinstance(e, TurnSpeculationStarted):
+                spec = _TurnBuilder(party=parties.get(e.leg_id or ""), speculation_started_at=e.at)
+                by_turn_id[e.turn_id] = spec
+                by_anchor[e.event_id] = spec
+                continue
+            if isinstance(e, TurnSpeculationCancelled):
+                # Keep its anchor mapped so what it caused stays with it, out of every turn.
+                by_turn_id.pop(e.turn_id, None)
+                continue
             if isinstance(e, TurnCommitted):
-                last = _TurnBuilder(commit=e, party=parties.get(e.leg_id or ""))
+                pending = by_turn_id.get(e.turn_id)
+                if pending is not None and pending.commit is None:
+                    last = pending
+                else:
+                    last = _TurnBuilder(party=parties.get(e.leg_id or ""))
+                last.commit = e
                 builders.append(last)
                 by_leg[e.leg_id] = last
                 by_turn_id[e.turn_id] = last
+                by_anchor[e.event_id] = last
                 continue
             if isinstance(e, BrainRouted):
                 target = by_turn_id.get(e.turn_id)
@@ -288,7 +334,9 @@ class TurnTimeline:
                 if owner is not None:
                     _record_tool_outcome(owner.tools[e.call_id], e)
                 continue
-            turn = by_leg.get(e.leg_id) if e.leg_id is not None else last
+            turn = _owner(e, by_anchor, by_turn_id)
+            if turn is None:
+                turn = by_leg.get(e.leg_id) if e.leg_id is not None else last
             if turn is None:
                 continue
             if isinstance(e, ToolProposed):
@@ -316,8 +364,8 @@ class TurnTimeline:
                         sentence=e.sentence,
                     )
                 )
-            elif isinstance(e, SpeechPlayed) and turn.played is None:
-                turn.played = e
+            elif isinstance(e, SpeechPlayed):
+                turn.heard(e)
 
         first = ordered[0] if ordered else None
         return cls(
@@ -396,6 +444,7 @@ class TurnTimeline:
             if t.gate_decision is not None:
                 root_attrs["switchboard.gate.decision"] = t.gate_decision
             root_attrs["switchboard.turn.interrupted"] = t.interrupted
+            root_attrs["switchboard.turn.speculative"] = t.speculative
             if self.capture_content:
                 root_attrs["switchboard.turn.text"] = t.text
             root = add(
@@ -419,7 +468,9 @@ class TurnTimeline:
                     f"{base}/route",
                     "switchboard.route",
                     root,
-                    t.committed_at,
+                    t.committed_at
+                    if t.speculation_started_at is None
+                    else t.speculation_started_at,
                     t.routed_at,
                     {
                         "switchboard.router.tier": t.model_tier,
@@ -497,6 +548,18 @@ class TurnTimeline:
                     {"switchboard.turn.interrupted": t.interrupted},
                 )
         return out
+
+
+def _owner(
+    e: AnyEvent, by_anchor: dict[str, _TurnBuilder], by_turn_id: dict[str, _TurnBuilder]
+) -> _TurnBuilder | None:
+    """The turn an event belongs to by causation, or by the turn id its utterance id names."""
+    if e.causation_id is not None and e.causation_id in by_anchor:
+        return by_anchor[e.causation_id]
+    utterance_id = getattr(e, "utterance_id", None)
+    if isinstance(utterance_id, str) and "/" in utterance_id:
+        return by_turn_id.get(utterance_id.split("/", 1)[0])
+    return None
 
 
 def _record_tool_outcome(slot: dict[str, Any], e: PolicyVerdict | ToolExecuted) -> None:

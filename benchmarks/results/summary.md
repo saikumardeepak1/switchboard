@@ -9,7 +9,7 @@ listed at the end.
 | mode | violating proposed | violating executed | flagged after execution | false blocks on legit writes | check latency |
 |---|---|---|---|---|---|
 | post-hoc detector (baseline) | 1677 | 1437 | 1348 | 0 | 3000 ms modeled, after execution |
-| pre-execution checker | 1732 | 0 | n/a | 0 | p50 8.0 us, p99 44.9 us (measured) |
+| pre-execution checker | 1732 | 0 | n/a | 0 | p50 5.6 us, p99 23.7 us (measured) |
 
 | violation kind | baseline proposed | baseline executed | checker proposed | checker executed |
 |---|---|---|---|---|
@@ -25,42 +25,42 @@ Logged verdicts recomputed from the log: 7732, mismatches: 0.
 
 | config | verifier calls | corrupted caught | corrupted released | false blocks on clean |
 |---|---|---|---|---|
-| tier 1 only (runtime default) | 0 | 100.0% | 0 | 3.1% |
-| tier 1 + lexical scorer + tier 3 | 1702 | n/a | 0 | 31.5% |
+| tier 1 only (runtime default) | 0 | 100.0% | 0 | 0.0% |
+| tier 1 + lexical scorer + tier 3 | 665 | n/a | 5 | 0.0% |
 | every sentence to tier 3 (baseline) | 20000 | 94.2% | 30 | 0.0% (assumed) |
 
-False blocks by category (tier 1 only):
+False blocks on clean sentences by category:
 
-| category | clean sentences | false blocks | rate |
-|---|---|---|---|
-| claimless | 8330 | 0 | 0.0% |
-| eta_clock | 1586 | 0 | 0.0% |
-| eta_minutes | 1465 | 0 | 0.0% |
-| order_id | 2307 | 0 | 0.0% |
-| paraphrase_clock | 385 | 0 | 0.0% |
-| paraphrase_money | 603 | 0 | 0.0% |
-| pay | 2252 | 0 | 0.0% |
-| refund | 1945 | 0 | 0.0% |
-| relative_eta | 607 | 607 | 100.0% |
+| category | clean sentences | tier 1 only | rate | with lexical scorer | rate |
+|---|---|---|---|---|---|
+| claimless | 8330 | 0 | 0.0% | 0 | 0.0% |
+| eta_clock | 1586 | 0 | 0.0% | 0 | 0.0% |
+| eta_minutes | 1465 | 0 | 0.0% | 0 | 0.0% |
+| order_id | 2307 | 0 | 0.0% | 0 | 0.0% |
+| paraphrase_clock | 385 | 0 | 0.0% | 0 | 0.0% |
+| paraphrase_money | 603 | 0 | 0.0% | 0 | 0.0% |
+| pay | 2252 | 0 | 0.0% | 0 | 0.0% |
+| refund | 1945 | 0 | 0.0% | 0 | 0.0% |
+| relative_eta | 607 | 0 | 0.0% | 0 | 0.0% |
 
-Tier 1 latency: p50 48.7 us, p99 196.4 us. Share of sentences needing tier 3 with the lexical scorer: 8.5%.
+Tier 1 latency: p50 42.5 us, p99 125.0 us. Tier 1 only escalations, failed closed with no verifier and counted as blocks: 0.5% of sentences. Share of sentences needing tier 3 with the lexical scorer: 3.3%.
 
-## speculation_latency (voice to voice as the caller hears it)
+## speculation_latency (voice to voice from TurnTimeline, end of speech to first audio)
 
-| eager threshold | persona | v2v p50 ms | v2v p95 ms | speculations | cancelled share | wasted output tokens |
-|---|---|---|---|---|---|---|
-| 0.3 | clean | 776 | 1.3e+03 | 200 | 0.0% | 0.0% |
-| 0.3 | slow_speaker | 945 | 1.41e+03 | 243 | 16.5% | 0.1% |
-| 0.4 | clean | 776 | 1.3e+03 | 200 | 0.0% | 0.0% |
-| 0.4 | slow_speaker | 940 | 1.42e+03 | 228 | 11.0% | 0.1% |
-| 0.5 | clean | 776 | 1.3e+03 | 200 | 0.0% | 0.0% |
-| 0.5 | slow_speaker | 941 | 1.42e+03 | 214 | 5.1% | 0.0% |
-| 0.6 | clean | 810 | 1.34e+03 | 200 | 0.0% | 0.0% |
-| 0.6 | slow_speaker | 971 | 1.43e+03 | 211 | 3.8% | 0.0% |
-| 0.7 | clean | 927 | 1.46e+03 | 200 | 0.0% | 0.0% |
-| 0.7 | slow_speaker | 1.1e+03 | 1.64e+03 | 206 | 1.5% | 0.1% |
-| off | clean | 1.05e+03 | 1.58e+03 | 0 | n/a | 0.0% |
-| off | slow_speaker | 1.29e+03 | 1.9e+03 | 0 | n/a | 0.0% |
+| eager threshold | persona | v2v p50 ms | v2v p95 ms | caller-measured p50 ms | speculations | cancelled share | wasted output tokens |
+|---|---|---|---|---|---|---|---|
+| 0.3 | clean | 776 | 1.3e+03 | 776 | 200 | 0.0% | 0.0% |
+| 0.3 | slow_speaker | 958 | 1.37e+03 | 957 | 243 | 16.5% | 0.1% |
+| 0.4 | clean | 776 | 1.3e+03 | 776 | 200 | 0.0% | 0.0% |
+| 0.4 | slow_speaker | 955 | 1.45e+03 | 954 | 228 | 11.0% | 0.1% |
+| 0.5 | clean | 776 | 1.3e+03 | 776 | 200 | 0.0% | 0.0% |
+| 0.5 | slow_speaker | 955 | 1.44e+03 | 954 | 214 | 5.1% | 0.0% |
+| 0.6 | clean | 809 | 1.34e+03 | 809 | 200 | 0.0% | 0.0% |
+| 0.6 | slow_speaker | 972 | 1.52e+03 | 972 | 211 | 3.8% | 0.0% |
+| 0.7 | clean | 927 | 1.46e+03 | 927 | 200 | 0.0% | 0.0% |
+| 0.7 | slow_speaker | 1.1e+03 | 1.69e+03 | 1.1e+03 | 206 | 1.5% | 0.1% |
+| off | clean | 1.05e+03 | 1.58e+03 | 1.05e+03 | 0 | n/a | 0.0% |
+| off | slow_speaker | 1.29e+03 | 1.94e+03 | 1.29e+03 | 0 | n/a | 0.0% |
 
 ## endpointing (3000 turns, 1360 with a mid-sentence pause)
 
@@ -100,22 +100,22 @@ Tier 1 latency: p50 48.7 us, p99 196.4 us. Share of sentences needing tier 3 wit
 
 | routing | cache | total $/min | LLM $/min | LLM share | turns to talker |
 |---|---|---|---|---|---|
-| talker_thinker | auto | 0.0688 | 0.0134 | 19.4% | 36.4% |
-| talker_thinker | always_hit | 0.0667 | 0.0112 | 16.8% | 36.4% |
-| talker_thinker | never | 0.0807 | 0.0252 | 31.3% | 36.4% |
-| thinker_only | auto | 0.0737 | 0.0173 | 23.4% | 36.1% |
-| thinker_only | always_hit | 0.0716 | 0.0151 | 21.1% | 36.1% |
-| thinker_only | never | 0.0912 | 0.0347 | 38.1% | 36.1% |
+| talker_thinker | auto | 0.0727 | 0.0140 | 19.3% | 36.4% |
+| talker_thinker | always_hit | 0.0706 | 0.0119 | 16.9% | 36.4% |
+| talker_thinker | never | 0.0840 | 0.0253 | 30.1% | 36.4% |
+| thinker_only | auto | 0.0747 | 0.0172 | 23.0% | 36.3% |
+| thinker_only | always_hit | 0.0727 | 0.0152 | 20.9% | 36.3% |
+| thinker_only | never | 0.0904 | 0.0329 | 36.4% | 36.3% |
 
 ## wall time
 
 | benchmark | seconds |
 |---|---|
-| policy_gate | 27.4 |
-| grounding_gate | 1.2 |
-| speculation_latency | 5.7 |
-| endpointing | 1.7 |
-| idempotency | 25.5 |
-| multiparty | 4.1 |
-| cost | 3.0 |
-| total | 68.7 |
+| policy_gate | 23.7 |
+| grounding_gate | 0.9 |
+| speculation_latency | 5.6 |
+| endpointing | 1.6 |
+| idempotency | 23.4 |
+| multiparty | 3.8 |
+| cost | 2.6 |
+| total | 61.5 |

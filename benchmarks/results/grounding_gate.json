@@ -28,81 +28,101 @@
         "corrupted": 0,
         "false_block_rate": 0.0,
         "false_blocks": 0,
+        "scored_false_block_rate": 0.0,
+        "scored_false_blocks": 0,
         "sentences": 8330
       },
       "eta_clock": {
         "corrupted": 76,
         "false_block_rate": 0.0,
         "false_blocks": 0,
+        "scored_false_block_rate": 0.0,
+        "scored_false_blocks": 0,
         "sentences": 1662
       },
       "eta_minutes": {
         "corrupted": 81,
         "false_block_rate": 0.0,
         "false_blocks": 0,
+        "scored_false_block_rate": 0.0,
+        "scored_false_blocks": 0,
         "sentences": 1546
       },
       "order_id": {
         "corrupted": 127,
         "false_block_rate": 0.0,
         "false_blocks": 0,
+        "scored_false_block_rate": 0.0,
+        "scored_false_blocks": 0,
         "sentences": 2434
       },
       "paraphrase_clock": {
         "corrupted": 0,
         "false_block_rate": 0.0,
         "false_blocks": 0,
+        "scored_false_block_rate": 0.0,
+        "scored_false_blocks": 0,
         "sentences": 385
       },
       "paraphrase_money": {
         "corrupted": 0,
         "false_block_rate": 0.0,
         "false_blocks": 0,
+        "scored_false_block_rate": 0.0,
+        "scored_false_blocks": 0,
         "sentences": 603
       },
       "pay": {
         "corrupted": 125,
         "false_block_rate": 0.0,
         "false_blocks": 0,
+        "scored_false_block_rate": 0.0,
+        "scored_false_blocks": 0,
         "sentences": 2377
       },
       "refund": {
         "corrupted": 85,
         "false_block_rate": 0.0,
         "false_blocks": 0,
+        "scored_false_block_rate": 0.0,
+        "scored_false_blocks": 0,
         "sentences": 2030
       },
       "relative_eta": {
         "corrupted": 26,
-        "false_block_rate": 1.0,
-        "false_blocks": 607,
+        "false_block_rate": 0.0,
+        "false_blocks": 0,
+        "scored_false_block_rate": 0.0,
+        "scored_false_blocks": 0,
         "sentences": 633
       }
     },
     "corrupted": 520,
     "corruption_rate_of_all_sentences": 0.026,
-    "false_block_rate_clean": 0.031160164271047227,
-    "false_block_rate_clean_with_claims": 0.05443946188340807,
-    "false_blocks_clean": 607,
+    "false_block_rate_clean": 0.0,
+    "false_block_rate_clean_with_claims": 0.0,
+    "false_blocks_clean": 0,
     "sentences": 20000,
     "tier1_catch_rate": 1.0,
     "tier1_caught": 520,
     "tier1_latency_us": {
-      "p50": 48.687506932765245,
-      "p99": 196.4211388258257
+      "p50": 42.54200030118227,
+      "p99": 125.04246667958789
     },
     "tier1_only": {
+      "escalated": 107,
+      "escalated_share": 0.00535,
       "tier3_share": 0.0,
       "verifier_calls": 0
     },
     "tier1_only_released_corrupt": 0,
-    "verifier_calls_avoided_with_scorer": 0.9149,
+    "verifier_calls_avoided_with_scorer": 0.96675,
     "with_scorer": {
-      "false_blocks_clean": 6142,
-      "released_corrupt": 0,
-      "scorer_false_blocks": 5535,
-      "tier3_share": 0.0851,
-      "verifier_calls": 1702
+      "false_blocks_clean": 0,
+      "released_corrupt": 5,
+      "scorer_false_blocks": 0,
+      "tier3_share": 0.03325,
+      "verifier_calls": 665
     }
   },
   "simulated": true
