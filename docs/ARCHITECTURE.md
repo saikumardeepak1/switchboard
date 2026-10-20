@@ -251,6 +251,10 @@ order) followed by the volatile suffix, so provider prefix caches hit.
 `Leg` wires transport, endpointing, the speculative engine, the gate and playback for one party.
 `spawn_child(goal, party, result_schema)` opens an outbound child leg whose result arrives as a
 `child.result` event to the parent. `AdmissionController` enforces per-tenant concurrent-call caps.
+`runtime.twilio_session.TwilioSessionFactory` is the `api.media.SessionFactory` for Twilio Media
+Streams: one conversation per stream, caller PCM into a per-call STT, synthesized chunks out as
+`Utterance` plus mark, and `Clear` on barge-in. It is the one runtime module that imports `api`
+(only the transport types in `api.media`), and nothing in `api` imports `runtime`.
 
 ### sim
 
