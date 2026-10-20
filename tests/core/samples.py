@@ -20,6 +20,7 @@ from switchboard.core.events import (
     ToolCompensated,
     ToolExecuted,
     ToolProposed,
+    ToolUnresolved,
     TurnBackchannel,
     TurnCommitted,
     TurnSpeculationCancelled,
@@ -67,6 +68,7 @@ def every_event_type(conversation_id: str = "conv_1") -> list[AnyEvent]:
         ToolCompensated(
             **b, call_id="call_1", compensation_tool="void_refund", result={"ok": True}
         ),
+        ToolUnresolved(**b, call_id="call_1", tool="issue_refund", reason="conversation ended"),
         SpeechSentenceGated(
             **b,
             utterance_id="utt_1",

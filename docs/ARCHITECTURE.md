@@ -116,6 +116,7 @@ Event catalog (type string, payload fields):
 | `policy.verdict` | call_id, allowed, rule_ids, repair_hint |
 | `tool.executed` | call_id, tool, result, idempotency_key, replayed (bool) |
 | `tool.compensated` | call_id, compensation_tool, result |
+| `tool.unresolved` | call_id, tool, idempotency_key, reason (still running at hang-up; ledger left pending) |
 | `speech.sentence_gated` | utterance_id, sentence, decision (`release`/`block`/`escalate`), tier, claims |
 | `speech.played` | utterance_id, text_played, interrupted (bool), tts_provider |
 | `procedure.advanced` | step, state |

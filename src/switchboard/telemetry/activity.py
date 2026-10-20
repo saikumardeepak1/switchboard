@@ -42,6 +42,7 @@ from switchboard.core.events import (
     ToolCompensated,
     ToolExecuted,
     ToolProposed,
+    ToolUnresolved,
     TurnBackchannel,
     TurnCommitted,
     TurnSpeculationCancelled,
@@ -192,7 +193,7 @@ def severity(event: AnyEvent) -> Severity:
         return "warn"
     if isinstance(event, SpeechSentenceGated) and event.decision == "block":
         return "warn"
-    if isinstance(event, HandoffRequested | ToolCompensated):
+    if isinstance(event, HandoffRequested | ToolCompensated | ToolUnresolved):
         return "warn"
     return "info"
 
@@ -236,6 +237,8 @@ def _describe(e: AnyEvent) -> str:
             return f"Executed {e.tool}" + (" (replayed from ledger)" if e.replayed else "")
         case ToolCompensated():
             return f"Compensated {e.call_id} with {e.compensation_tool}"
+        case ToolUnresolved():
+            return f"{e.tool} outcome unknown at {e.reason or 'shutdown'}; left to its lease"
         case SpeechSentenceGated():
             verb = {"release": "Released", "block": "Blocked", "escalate": "Escalated"}
             return f"{verb[e.decision]} sentence (tier {e.tier}): {e.sentence!r}"

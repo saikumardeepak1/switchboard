@@ -112,6 +112,19 @@ class ToolCompensated(Event):
     result: dict[str, Any]
 
 
+class ToolUnresolved(Event):
+    """A tool call was still running when the conversation ended; its outcome is unknown.
+
+    The ledger entry stays `pending`, so its lease decides whether a retry may run it again.
+    """
+
+    type: Literal["tool.unresolved"] = "tool.unresolved"
+    call_id: str
+    tool: str
+    idempotency_key: str | None = None
+    reason: str = ""
+
+
 class SpeechSentenceGated(Event):
     type: Literal["speech.sentence_gated"] = "speech.sentence_gated"
     utterance_id: str
@@ -184,6 +197,7 @@ AnyEvent = Annotated[
     | PolicyVerdict
     | ToolExecuted
     | ToolCompensated
+    | ToolUnresolved
     | SpeechSentenceGated
     | SpeechPlayed
     | ProcedureAdvanced

@@ -23,6 +23,7 @@ CATALOG = {
     "policy.verdict",
     "tool.executed",
     "tool.compensated",
+    "tool.unresolved",
     "speech.sentence_gated",
     "speech.played",
     "procedure.advanced",

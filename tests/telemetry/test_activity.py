@@ -96,7 +96,12 @@ async def test_bad_cursor_is_rejected() -> None:
 
 def test_type_prefix_resolution() -> None:
     assert resolve_types(["policy."]) == {"policy.verdict"}
-    assert resolve_types(["tool.*"]) == {"tool.proposed", "tool.executed", "tool.compensated"}
+    assert resolve_types(["tool.*"]) == {
+        "tool.proposed",
+        "tool.executed",
+        "tool.compensated",
+        "tool.unresolved",
+    }
     assert resolve_types(["speech.played", "handoff."]) == {"speech.played", "handoff.requested"}
     assert resolve_types([]) is None
     with pytest.raises(InvalidFilter, match="nope"):

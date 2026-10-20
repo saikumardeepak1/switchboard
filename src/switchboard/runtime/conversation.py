@@ -50,6 +50,7 @@ from switchboard.core import (
     SpeechPlayed,
     ToolCompensated,
     ToolExecuted,
+    ToolUnresolved,
     TurnCommitted,
     new_id,
 )
@@ -61,6 +62,7 @@ from switchboard.effects import (
     ToolCall,
     ToolResult,
     ToolSpec,
+    idempotency_key,
 )
 from switchboard.grounding import Evidence, GroundingGate
 from switchboard.knowledge import BitemporalStore, Document, FactStore, KnowledgeIndex
@@ -143,6 +145,8 @@ class Conversation:
         self._unlogged = Evidence()
         self._index = _knowledge_index(bundle, runtime.facts)
         self._tasks: set[asyncio.Task[Any]] = set()
+        # Tool executions in flight, kept apart so `end` waits for them instead of cancelling.
+        self._executions: dict[asyncio.Task[Any], tuple[str | None, str, str, str | None]] = {}
 
     # the actor
 
@@ -335,7 +339,15 @@ class Conversation:
                 )
             return payload
 
-        return await asyncio.shield(self._spawn(run()))
+        task = self._spawn(run())
+        self._tasks.discard(task)
+        spec = self.bundle.registry.get(tool)
+        key = None
+        if spec is not None and spec.spec.effect == "write":
+            key = idempotency_key(self.id, intent, tool, args, spec.spec.idempotency)
+        self._executions[task] = (leg_id, call_id, tool, key)
+        task.add_done_callback(lambda t: self._executions.pop(t, None))
+        return await asyncio.shield(task)
 
     async def rollback(self, call_ids: Sequence[str] | None = None) -> None:
         """Compensate executed writes, newest first, with the compensations their specs declare.
@@ -608,6 +620,7 @@ class Conversation:
         for leg in sorted(self.legs.values(), key=lambda leg: leg.role != "outbound_child"):
             if not leg.closed:
                 await leg.close("conversation_ended")
+        await self._settle_executions(outcome)
         for task in list(self._tasks):
             task.cancel()
         if outcome in self.bundle.config.rollback_on:
@@ -619,11 +632,38 @@ class Conversation:
         await self.runtime.actors.stop(self.id)
         self.runtime.conversations.pop(self.id, None)
 
+    async def _settle_executions(self, outcome: str) -> None:
+        """Let in-flight tool calls finish, up to `end_write_timeout_s` on the clock.
+
+        Cancelling a write mid-call would leave its effect applied downstream with nothing in
+        the log. One still running at the bound is cancelled without touching its ledger claim,
+        and recorded as `tool.unresolved`.
+        """
+        if not self._executions:
+            return
+        timer = asyncio.ensure_future(self.clock.sleep(self.runtime.end_write_timeout_s))
+        try:
+            while self._executions and not timer.done():
+                await asyncio.wait({*self._executions, timer}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            timer.cancel()
+        for task, (leg_id, call_id, tool, key) in list(self._executions.items()):
+            task.cancel()
+            await asyncio.wait([task])
+            await self.emit(
+                ToolUnresolved,
+                leg_id=leg_id,
+                call_id=call_id,
+                tool=tool,
+                idempotency_key=key,
+                reason=f"conversation ended ({outcome})",
+            )
+
     async def abandon(self) -> None:
         """Simulate the process dying: stop every task and write nothing more."""
         for leg in self.legs.values():
             leg.abandon()
-        for task in list(self._tasks):
+        for task in [*self._tasks, *self._executions]:
             task.cancel()
         self.runtime.admission.release(self.state.tenant_id, self.id)
         self.runtime.conversations.pop(self.id, None)
@@ -655,6 +695,7 @@ class Runtime:
         max_llm_calls: int = 6,
         capture_content: bool = True,
         request_detector: RequestDetector | None = None,
+        end_write_timeout_s: float = 10.0,
     ) -> None:
         self.clock = clock
         self.store = store
@@ -673,6 +714,8 @@ class Runtime:
         # Record knowledge and memory text in the log, the system of record (see module doc).
         self.capture_content = capture_content
         self.request_detector = request_detector or RequestDetector()
+        # How long ending a conversation waits for tool calls already running.
+        self.end_write_timeout_s = end_write_timeout_s
         self.conversations: dict[str, Conversation] = {}
         self.actors = ActorRuntime(self._actor, clock)
 
