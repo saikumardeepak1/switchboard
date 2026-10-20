@@ -120,3 +120,27 @@ async def test_serve_populates_a_store_the_api_can_read() -> None:
     body = client.get(f"/v1/conversations/{ids[0]}").json()
     assert body["timeline"]["turns"]
     assert client.get("/v1/activity", params={"conversation_id": ids[1]}).json()["items"]
+
+
+async def test_serve_prints_an_activity_url_whose_token_reads_the_demo_calls() -> None:
+    from fastapi.testclient import TestClient
+
+    from benchmarks.serve import prepare
+
+    app, lines = await prepare("127.0.0.1", 8000, calls=1, token="demo-token")
+    assert "http://127.0.0.1:8000/activity#token=demo-token" in lines
+    client = TestClient(app)
+    assert client.get("/v1/activity").status_code == 401
+    authed = client.get("/v1/activity", headers={"Authorization": "Bearer demo-token"})
+    assert authed.status_code == 200 and authed.json()["items"]
+
+
+async def test_serve_makes_a_fresh_token_when_none_is_given() -> None:
+    from benchmarks.serve import prepare
+
+    _, first = await prepare("127.0.0.1", 8000, calls=1)
+    _, second = await prepare("127.0.0.1", 8000, calls=1)
+    url = next(line for line in first if "#token=" in line)
+    token = url.split("#token=", 1)[1]
+    assert len(token) >= 20
+    assert url not in second
