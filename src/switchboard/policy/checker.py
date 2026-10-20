@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
 
 from switchboard.core.events import Event
 from switchboard.policy.expr import EvalContext, Expr, evaluate_indexed, index_events
-from switchboard.policy.procedure import ProcedureGraph
+from switchboard.policy.index import EventIndex
+from switchboard.policy.procedure import ProcedureGraph, ProcedureState
 
 __all__ = [
     "CheckContext",
@@ -32,13 +33,20 @@ class ProposedCall:
 
 @dataclass(frozen=True, slots=True)
 class CheckContext:
-    """Everything a check may read besides the call itself. `args` come from the call."""
+    """Everything a check may read besides the call itself. `args` come from the call.
+
+    A long-running caller passes `index` (kept up to date as events are appended) and
+    `completed_steps` (its folded procedure state) instead of `events`, so a check costs the
+    same at turn 500 as at turn 5. Given either, the checker never scans `events`.
+    """
 
     evidence: Mapping[str, Any] = field(default_factory=dict)
     state: Mapping[str, Any] = field(default_factory=dict)
     events: Sequence[Event] = ()
     # Overrides the compile-time tool effect map for `when: {effect: ...}` rules.
     tool_effects: Mapping[str, str] | None = None
+    index: EventIndex | None = None
+    completed_steps: Collection[str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,20 +122,20 @@ class CompiledPolicy:
         hints: list[str] = []
         missing: dict[str, tuple[str, ...]] = {}
 
-        by_type = index_events(ctx.events)
+        by_type: dict[str, list[Event]] | None = None
+        if ctx.index is None and (ctx.completed_steps is None or ctx.events):
+            by_type = index_events(ctx.events)
         if self.procedure.require_before.get(call.tool):
-            done = self.procedure.state_from_events(
-                (*by_type.get("procedure.advanced", ()), *by_type.get("tool.executed", ()))
-            )
+            done = self._done(ctx, by_type)
             for step in self.procedure.missing_prerequisites(call.tool, done):
                 ids.append(f"{PROCEDURE_RULE_PREFIX}{step}")
                 hints.append(f"Complete step {step!r} before calling {call.tool}.")
 
         rules = self.applicable(call.tool, ctx)
         if rules:
-            eval_ctx = EvalContext(call.args, ctx.evidence, ctx.state, ctx.events)
+            eval_ctx = EvalContext(call.args, ctx.evidence, ctx.state, ctx.events, ctx.index)
             for rule in rules:
-                result = evaluate_indexed(rule.require, eval_ctx, by_type)
+                result = evaluate_indexed(rule.require, eval_ctx, by_type or {})
                 if result.value is True:
                     continue
                 ids.append(rule.id)
@@ -137,6 +145,18 @@ class CompiledPolicy:
 
         hint = " ".join(dict.fromkeys(hints)) if hints else None
         return CheckReport(Verdict(not ids, ids, hint), missing)
+
+    def _done(self, ctx: CheckContext, by_type: dict[str, list[Event]] | None) -> ProcedureState:
+        if ctx.completed_steps is not None:
+            return ProcedureState(frozenset(ctx.completed_steps))
+        if ctx.index is not None:
+            return self.procedure.state_from_events(
+                (*ctx.index.of_type("procedure.advanced"), *ctx.index.of_type("tool.executed"))
+            )
+        assert by_type is not None
+        return self.procedure.state_from_events(
+            (*by_type.get("procedure.advanced", ()), *by_type.get("tool.executed", ()))
+        )
 
     def check(self, call: ProposedCall, ctx: CheckContext) -> Verdict:
         return self.explain(call, ctx).verdict

@@ -18,6 +18,10 @@ Grounding inputs. The gate checks spoken claims against tool results, child resu
 knowledge text and memory read at setup. All four are in the log (`knowledge.retrieved` and
 `memory.loaded` carry their text when content capture is on), so `grounding_evidence()` on a
 replayed state is exactly what the live gate saw.
+
+Incremental by construction. The grounding evidence, the policy event index and the set of
+tools that have succeeded are updated here, once per event, and never rebuilt from the whole
+log. A check at turn 500 costs what it cost at turn 5; `replay` rebuilds all three.
 """
 
 from __future__ import annotations
@@ -50,6 +54,7 @@ from switchboard.core import (
     TurnSpeculationStarted,
 )
 from switchboard.grounding import Evidence
+from switchboard.policy import EventIndex, ProcedureGraph
 from switchboard.policy.procedure import tool_succeeded
 
 # Verdicts with these rule ids are runtime refusals, not policy denials the model must repair.
@@ -132,6 +137,10 @@ class ConversationState:
     memory_texts: list[str] = field(default_factory=list)
     # A `memory.loaded` event carried its text, so recovery need not read memory again.
     memory_captured: bool = False
+    # Kept current by `apply_event`; see the module docstring.
+    grounding: Evidence = field(default_factory=Evidence)
+    index: EventIndex = field(default_factory=EventIndex)
+    succeeded_tools: set[str] = field(default_factory=set)
     handoffs: list[str] = field(default_factory=list)
     compensations: list[str] = field(default_factory=list)
     ended: bool = False
@@ -145,11 +154,14 @@ class ConversationState:
 
     def grounding_evidence(self) -> Evidence:
         """The grounding gate's evidence: tool and child results, knowledge text, memory."""
-        return Evidence(
-            tool_results=[*self.tool_results, *self.child_results.values()],
-            facts=list(self.knowledge.values()),
-            memory=self.memory_texts,
-        )
+        return self.grounding
+
+    def procedure_done(self, graph: ProcedureGraph) -> frozenset[str]:
+        """Completed steps, as `ProcedureGraph.state_from_events` would compute them from the
+        log: advanced steps plus steps whose completing tool succeeded."""
+        done = set(self.completed_steps)
+        done.update(graph.completes[t] for t in self.succeeded_tools if t in graph.completes)
+        return frozenset(s for s in done if s in graph.steps)
 
     def pending_calls(self) -> list[CallState]:
         """Calls the policy allowed whose execution was never recorded, in proposal order."""
@@ -208,6 +220,7 @@ def _utterance_entry(
 
 def apply_event(state: ConversationState, event: AnyEvent) -> None:
     state.last_seq = event.seq
+    state.index.add(event)
     turn_id = state.anchors.get(event.causation_id or "")
     match event:
         case ConversationStarted():
@@ -296,7 +309,10 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
                 call.idempotency_key = event.idempotency_key
                 call.replayed = event.replayed
             if tool_succeeded(event.result):
-                state.tool_results.append({"tool": event.tool, **event.result})
+                result = {"tool": event.tool, **event.result}
+                state.tool_results.append(result)
+                state.grounding.add(result)
+                state.succeeded_tools.add(event.tool)
                 _merge_evidence(state, event.result)
             _history(state, event.leg_id).append(
                 HistoryEntry(
@@ -322,6 +338,7 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
                 state.completed_steps.append(event.step)
         case ChildResult():
             state.child_results[event.child_leg_id] = dict(event.result)
+            state.grounding.add(dict(event.result))
             _merge_evidence(state, event.result)
             child = state.legs.get(event.child_leg_id)
             party = child.party if child is not None else "party"
@@ -336,11 +353,14 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
                 if fact_id not in state.knowledge_ids:
                     state.knowledge_ids.append(fact_id)
             for fact_id, text in zip(event.fact_ids, event.texts, strict=False):
+                if state.knowledge.get(fact_id) != text:
+                    state.grounding.add(text)
                 state.knowledge[fact_id] = text
         case MemoryLoaded():
             if event.texts or event.count == 0:
                 state.memory_texts = list(event.texts)
                 state.memory_captured = True
+                state.grounding.add(list(event.texts))
         case HandoffRequested():
             state.handoffs.append(event.reason)
         case ConversationEnded():

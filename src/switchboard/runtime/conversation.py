@@ -125,6 +125,8 @@ class Conversation:
         self.router: Router = runtime.router or _bundle_router(bundle)
         self.runner = EffectRunner(bundle.registry, runtime.ledger, runtime.clock)
         self._knowledge: dict[str, str] = {}
+        # Knowledge and memory text held only here when content capture is off.
+        self._unlogged = Evidence()
         self._index = _knowledge_index(bundle, runtime.facts)
         self._tasks: set[asyncio.Task[Any]] = set()
 
@@ -193,17 +195,14 @@ class Conversation:
 
     def open_steps(self) -> tuple[str, ...]:
         graph = self.bundle.policy.procedure
-        return graph.open_steps(ProcedureState(frozenset(self.state.completed_steps)))
+        return graph.open_steps(ProcedureState(self.state.procedure_done(graph)))
 
     def grounding_evidence(self) -> Evidence:
         if self.runtime.capture_content:
-            # Exactly what replay rebuilds from the log.
+            # Kept current as events are appended, and exactly what replay rebuilds.
             return self.state.grounding_evidence()
-        return Evidence(
-            tool_results=[*self.state.tool_results, *self.state.child_results.values()],
-            facts=self.knowledge_texts(),
-            memory=self.memory_texts,
-        )
+        # The log lacks the text, so merge in what this process holds. Costs the index size.
+        return self.state.grounding_evidence().union(self._unlogged)
 
     async def load_memory(self) -> None:
         """Read memory once at setup and record what was read (ADR-011)."""
@@ -212,6 +211,8 @@ class Conversation:
             return
         items = memory.read(self.state.tenant_id, self.state.customer_id, self.clock.now())
         self.memory_texts = [str(i.content.get("text") or canonical_json(i.content)) for i in items]
+        if not self.runtime.capture_content:
+            self._unlogged.add(self.memory_texts)
         await self.emit(
             MemoryLoaded,
             leg_id=None,
@@ -221,10 +222,11 @@ class Conversation:
 
     def check(self, call: ToolCallChunk, tool_effects: Mapping[str, str]) -> Verdict:
         ctx = CheckContext(
-            evidence=dict(self.state.evidence),
+            evidence=self.state.evidence,
             state={"completed_steps": list(self.state.completed_steps)},
-            events=tuple(self.events),
             tool_effects=tool_effects,
+            index=self.state.index,
+            completed_steps=self.state.procedure_done(self.bundle.policy.procedure),
         )
         return self.bundle.policy.check(ProposedCall(call.name, call.args, call.call_id), ctx)
 
@@ -234,6 +236,8 @@ class Conversation:
         if not results:
             return
         for result in results:
+            if not self.runtime.capture_content and result.source_id not in self._knowledge:
+                self._unlogged.add(result.text)
             self._knowledge[result.source_id] = result.text
         await self.emit(
             KnowledgeRetrieved,

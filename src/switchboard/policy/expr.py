@@ -31,9 +31,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from switchboard.core.events import EVENT_TYPES, Event
+
+if TYPE_CHECKING:
+    from switchboard.policy.index import EventIndex
 
 __all__ = [
     "MISSING",
@@ -50,7 +53,9 @@ __all__ = [
     "ParseError",
     "Path",
     "evaluate",
+    "eq",
     "evaluate_indexed",
+    "event_field",
     "holds",
     "index_events",
     "parse",
@@ -253,10 +258,12 @@ class Count(Expr):
         wanted = [expr.ev(env) for _, expr in self.filters]
         if any(v is MISSING for v in wanted):
             return 0
+        pairs = tuple(zip(self._split, wanted, strict=True))
+        if env.index is not None:
+            return env.index.count(self.event_type, pairs)
         events = env.events_of(self.event_type)
         if not wanted:
             return len(events)
-        pairs = tuple(zip(self._split, wanted, strict=True))
         return sum(1 for e in events if all(_eq(_event_field(e, k), v) for k, v in pairs))
 
 
@@ -519,6 +526,8 @@ class EvalContext:
     evidence: Mapping[str, Any]
     state: Mapping[str, Any]
     events: Sequence[Event]
+    # When set, `count(...)` reads this incrementally maintained index instead of `events`.
+    index: EventIndex | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -528,13 +537,14 @@ class Evaluation:
 
 
 class _Env:
-    __slots__ = ("_by_type", "args", "events", "evidence", "missing", "state")
+    __slots__ = ("_by_type", "args", "events", "evidence", "index", "missing", "state")
 
     def __init__(self, ctx: EvalContext, by_type: dict[str, list[Event]] | None = None) -> None:
         self.args = ctx.args
         self.evidence = ctx.evidence
         self.state = ctx.state
         self.events = ctx.events
+        self.index = ctx.index
         self.missing: list[str] = []
         self._by_type = by_type
 
@@ -545,7 +555,9 @@ class _Env:
             return self.evidence
         return self.state
 
-    def events_of(self, event_type: str) -> list[Event]:
+    def events_of(self, event_type: str) -> Sequence[Event]:
+        if self.index is not None:
+            return self.index.of_type(event_type)
         if self._by_type is None:
             self._by_type = index_events(self.events)
         return self._by_type.get(event_type, [])
@@ -571,17 +583,22 @@ def _descend(current: object, fields: Sequence[str]) -> object:
     return current
 
 
-def _event_field(event: Event, keys: tuple[str, ...]) -> object:
+def event_field(event: Event, keys: tuple[str, ...]) -> object:
+    """The value at a dotted path into an event's fields, or `MISSING`."""
     if keys[0] not in type(event).model_fields:
         return MISSING
     return _descend(getattr(event, keys[0]), keys[1:])
+
+
+_event_field = event_field
 
 
 def _is_number(value: object) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool)
 
 
-def _eq(left: object, right: object) -> bool:
+def eq(left: object, right: object) -> bool:
+    """Equality as the rule language defines it: MISSING equals nothing, bools only bools."""
     if left is MISSING or right is MISSING:
         return False
     if isinstance(left, bool) or isinstance(right, bool):
@@ -590,6 +607,9 @@ def _eq(left: object, right: object) -> bool:
         return bool(left == right)
     except Exception:
         return False
+
+
+_eq = eq
 
 
 def _compare(op: str, left: object, right: object) -> bool:
