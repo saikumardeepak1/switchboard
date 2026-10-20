@@ -435,10 +435,19 @@ class Leg:
                         await conv.abort_turn(ctx.turn_id)
                         async for spoken in self._handoff(ctx, f"{denials} policy denials"):
                             yield spoken
+                        await self._give_up_child(ctx)
                         return
             await conv.abort_turn(ctx.turn_id)
             async for spoken in self._handoff(ctx, "model call budget exhausted"):
                 yield spoken
+            await self._give_up_child(ctx)
+
+    async def _give_up_child(self, ctx: TurnContext) -> None:
+        # A child call that cannot finish still owes its parent an answer: not confirmed.
+        if self.role == "outbound_child":
+            await self.conversation.report_child(
+                self, False, "The call could not be completed.", ctx.anchor_id
+            )
 
     async def _handoff(self, ctx: TurnContext, reason: str) -> AsyncIterator[Spoken]:
         await self.conversation.emit(
@@ -597,6 +606,8 @@ class Leg:
             )
             await ctx.committed.wait()  # cancelled along with the speculation
         verdict = conv.check(call, self.tool_effects)
+        if verdict.allowed and self.role == "outbound_child" and call.name == "report_result":
+            verdict = conv.check_child_report(self, call) or verdict
         await conv.emit(
             PolicyVerdict,
             leg_id=self.leg_id,

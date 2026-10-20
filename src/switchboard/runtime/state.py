@@ -12,7 +12,9 @@ keeping its real effects (a read tool that ran still produced evidence).
 
 Evidence. Policy rules read `evidence.<key>`. Keys come only from an explicit `evidence` mapping
 inside a successful tool result or a child call result, so a tool decides which of its fields are
-policy facts and the model cannot write one.
+policy facts and the model cannot write one. A child result's key also needs `provenance`: the
+child leg and the event id of a turn the other party committed on that leg. A key without it, or
+citing a turn that is not that party's, is dropped, so a child cannot confirm what nobody said.
 
 Grounding inputs. The gate checks spoken claims against tool results, child results, retrieved
 knowledge text and memory read at setup. All four are in the log (`knowledge.retrieved` and
@@ -151,6 +153,8 @@ class ConversationState:
     grounding: Evidence = field(default_factory=Evidence)
     index: EventIndex = field(default_factory=EventIndex)
     succeeded_tools: set[str] = field(default_factory=set)
+    # Event id of every committed user turn, to the leg it was spoken on.
+    turn_legs: dict[str, str] = field(default_factory=dict)
     handoffs: list[str] = field(default_factory=list)
     compensations: list[str] = field(default_factory=list)
     ended: bool = False
@@ -208,6 +212,21 @@ def _merge_evidence(state: ConversationState, result: Mapping[str, Any]) -> None
     patch = result.get("evidence")
     if isinstance(patch, Mapping):
         state.evidence.update({str(k): v for k, v in patch.items()})
+
+
+def _merge_child_evidence(
+    state: ConversationState, child_leg_id: str, result: Mapping[str, Any]
+) -> None:
+    patch = result.get("evidence")
+    provenance = result.get("provenance")
+    if not isinstance(patch, Mapping) or not isinstance(provenance, Mapping):
+        return
+    for key, value in patch.items():
+        source = provenance.get(key)
+        if not isinstance(source, Mapping) or source.get("child_leg_id") != child_leg_id:
+            continue
+        if state.turn_legs.get(str(source.get("turn_event_id"))) == child_leg_id:
+            state.evidence[str(key)] = value
 
 
 def _history(state: ConversationState, leg_id: str | None) -> list[HistoryEntry]:
@@ -289,6 +308,7 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
             if event.turn_id in state.turns:
                 state.turns[event.turn_id].status = "cancelled"
         case TurnCommitted():
+            state.turn_legs[event.event_id] = event.leg_id or ""
             leg = state.legs.get(event.leg_id or "")
             if leg is not None and leg.role == "inbound":
                 # Only the inbound party asks for actions; a child call's party answers questions.
@@ -396,10 +416,10 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
         case ChildResult():
             state.child_results[event.child_leg_id] = dict(event.result)
             state.grounding.add(dict(event.result))
-            _merge_evidence(state, event.result)
+            _merge_child_evidence(state, event.child_leg_id, event.result)
             child = state.legs.get(event.child_leg_id)
             party = child.party if child is not None else "party"
-            summary = {k: v for k, v in event.result.items() if k != "evidence"}
+            summary = {k: v for k, v in event.result.items() if k not in ("evidence", "provenance")}
             _history(state, event.leg_id).append(
                 HistoryEntry(
                     "system", f"Result of the call to the {party}: {canonical_json(summary)}"

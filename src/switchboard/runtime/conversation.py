@@ -47,8 +47,10 @@ from switchboard.core import (
     LegOpened,
     MemoryLoaded,
     ProcedureAdvanced,
+    SpeechPlayed,
     ToolCompensated,
     ToolExecuted,
+    TurnCommitted,
     new_id,
 )
 from switchboard.effects import (
@@ -92,6 +94,9 @@ REPORT_RESULT = ToolSpec(
         "required": ["confirmed"],
     },
 )
+
+# Rule id of a child's confirmation refused because the party never answered.
+NO_PARTY_ANSWER = "runtime:no_party_answer"
 
 CHILD_PROMPT = (
     "You are on an outbound phone call to the {party} on behalf of {agent}. {description}\n"
@@ -232,6 +237,33 @@ class Conversation:
             leg_id=None,
             count=len(self.memory_texts),
             texts=self.memory_texts if self.runtime.capture_content else [],
+        )
+
+    def party_answer(self, child_id: str) -> str | None:
+        """Event id of the latest turn the party committed on a child leg after the agent
+        first spoke on its current dial, or None if the party has said nothing since."""
+        spoke = False
+        answer: str | None = None
+        for event in self.events:
+            if event.leg_id != child_id:
+                continue
+            if isinstance(event, LegOpened):
+                spoke, answer = False, None
+            elif isinstance(event, SpeechPlayed) and event.text_played.strip():
+                spoke = True
+            elif isinstance(event, TurnCommitted) and spoke:
+                answer = event.event_id
+        return answer
+
+    def check_child_report(self, child: Leg, call: ToolCallChunk) -> Verdict | None:
+        """Refuse a confirmation the other party never gave."""
+        if call.args.get("confirmed") is not True or self.party_answer(child.leg_id):
+            return None
+        return Verdict(
+            False,
+            [NO_PARTY_ANSWER],
+            f"The {child.party} has not answered yet. Ask your question and wait for their "
+            "reply, or report confirmed false.",
         )
 
     def check(self, call: ToolCallChunk, tool_effects: Mapping[str, str]) -> Verdict:
@@ -492,9 +524,7 @@ class Conversation:
         child.start_agent_turn(opened_id, "outbound_call")
 
     async def finish_child(self, child: Leg, call: ToolCallChunk, causation_id: str) -> None:
-        assert child.parent_leg_id is not None
         confirmed = call.args.get("confirmed") is True
-        notes = str(call.args.get("notes", ""))
         executed = await self.emit(
             ToolExecuted,
             leg_id=child.leg_id,
@@ -503,18 +533,37 @@ class Conversation:
             tool=call.name,
             result={"recorded": True, "confirmed": confirmed},
         )
+        await self.report_child(
+            child, confirmed, str(call.args.get("notes", "")), executed.event_id
+        )
+
+    async def report_child(
+        self, child: Leg, confirmed: bool, notes: str, causation_id: str | None
+    ) -> None:
+        """Deliver a child call's answer to its parent and hang the child up.
+
+        The confirmation flag is set only with provenance: the child leg and the party's turn
+        that answered. Without an answer on the leg the flag is not set at all.
+        """
+        assert child.parent_leg_id is not None
         config = self.bundle.config.parties.get(child.party)
-        evidence = {config.confirms: confirmed} if config and config.confirms else {}
+        answer = self.party_answer(child.leg_id)
+        evidence: dict[str, Any] = {}
+        provenance: dict[str, Any] = {}
+        if config and config.confirms and answer is not None:
+            evidence = {config.confirms: confirmed}
+            provenance = {config.confirms: {"child_leg_id": child.leg_id, "turn_event_id": answer}}
         result = {
             "party": child.party,
-            "confirmed": confirmed,
+            "confirmed": confirmed and answer is not None,
             "notes": notes,
             "evidence": evidence,
+            "provenance": provenance,
         }
         delivered = await self.emit(
             ChildResult,
             leg_id=child.parent_leg_id,
-            causation_id=executed.event_id,
+            causation_id=causation_id,
             child_leg_id=child.leg_id,
             result=result,
         )
