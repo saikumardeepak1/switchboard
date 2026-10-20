@@ -134,6 +134,17 @@ class KnowledgeRetrieved(Event):
     type: Literal["knowledge.retrieved"] = "knowledge.retrieved"
     fact_ids: list[str]
     as_of: float
+    # The retrieved text, aligned with `fact_ids`, so replay rebuilds the grounding evidence.
+    # Empty when the runtime runs with content capture off.
+    texts: list[str] = Field(default_factory=list)
+
+
+class MemoryLoaded(Event):
+    """Memory read once at call setup (ADR-011). `texts` is empty with content capture off."""
+
+    type: Literal["memory.loaded"] = "memory.loaded"
+    count: int
+    texts: list[str] = Field(default_factory=list)
 
 
 class HandoffRequested(Event):
@@ -163,6 +174,7 @@ AnyEvent = Annotated[
     | ProcedureAdvanced
     | ChildResult
     | KnowledgeRetrieved
+    | MemoryLoaded
     | HandoffRequested
     | ConversationEnded,
     Field(discriminator="type"),

@@ -5,8 +5,12 @@ appends through `emit`, which goes through the conversation's mailbox in the cor
 the actor appends to the store with the expected sequence number and folds the stored events into
 `state`. Nothing else mutates `state`, which is why `replay(log)` reproduces it.
 
-Things the log does not hold live beside it: memory read at setup (ADR-011), the text of retrieved
-knowledge (the log records fact and document ids with `as_of`, ADR-010), and running tasks.
+The log is the system of record, so it also holds the inputs the grounding gate reads that do
+not come from a tool: memory read at setup (`memory.loaded`, ADR-011) and the text of retrieved
+knowledge (`knowledge.retrieved`, ADR-010). `replay(log)` therefore rebuilds the exact evidence
+behind every gate decision. `Runtime(capture_content=False)` keeps that text out of the log; the
+live call still uses it, but replay can no longer reproduce those decisions. Telemetry export
+has its own content flag, off by default (ADR-015).
 """
 
 from __future__ import annotations
@@ -41,6 +45,7 @@ from switchboard.core import (
     KnowledgeRetrieved,
     LegClosed,
     LegOpened,
+    MemoryLoaded,
     ProcedureAdvanced,
     ToolExecuted,
     new_id,
@@ -191,10 +196,27 @@ class Conversation:
         return graph.open_steps(ProcedureState(frozenset(self.state.completed_steps)))
 
     def grounding_evidence(self) -> Evidence:
+        if self.runtime.capture_content:
+            # Exactly what replay rebuilds from the log.
+            return self.state.grounding_evidence()
         return Evidence(
             tool_results=[*self.state.tool_results, *self.state.child_results.values()],
             facts=self.knowledge_texts(),
             memory=self.memory_texts,
+        )
+
+    async def load_memory(self) -> None:
+        """Read memory once at setup and record what was read (ADR-011)."""
+        memory = self.runtime.memory
+        if memory is None:
+            return
+        items = memory.read(self.state.tenant_id, self.state.customer_id, self.clock.now())
+        self.memory_texts = [str(i.content.get("text") or canonical_json(i.content)) for i in items]
+        await self.emit(
+            MemoryLoaded,
+            leg_id=None,
+            count=len(self.memory_texts),
+            texts=self.memory_texts if self.runtime.capture_content else [],
         )
 
     def check(self, call: ToolCallChunk, tool_effects: Mapping[str, str]) -> Verdict:
@@ -219,6 +241,7 @@ class Conversation:
             causation_id=causation_id,
             fact_ids=[r.source_id for r in results],
             as_of=now,
+            texts=[r.text for r in results] if self.runtime.capture_content else [],
         )
 
     async def execute(
@@ -453,6 +476,7 @@ class Runtime:
         admission: AdmissionController | None = None,
         knowledge_k: int = 3,
         max_llm_calls: int = 6,
+        capture_content: bool = True,
     ) -> None:
         self.clock = clock
         self.store = store
@@ -468,6 +492,8 @@ class Runtime:
         self.admission = admission or AdmissionController()
         self.knowledge_k = knowledge_k
         self.max_llm_calls = max_llm_calls
+        # Record knowledge and memory text in the log, the system of record (see module doc).
+        self.capture_content = capture_content
         self.conversations: dict[str, Conversation] = {}
         self.actors = ActorRuntime(self._actor, clock)
 
@@ -492,14 +518,10 @@ class Runtime:
             raise AdmissionRejected(decision)
         conv = Conversation(self, bundle, conversation_id)
         self.conversations[conversation_id] = conv
-        if self.memory is not None:
-            items = self.memory.read(tenant_id, customer_id, self.clock.now())
-            conv.memory_texts = [
-                str(i.content.get("text") or canonical_json(i.content)) for i in items
-            ]
         await conv.emit(
             ConversationStarted, leg_id=None, tenant_id=tenant_id, customer_id=customer_id
         )
+        await conv.load_memory()
         leg_id = new_id("leg", self.rng)
         await conv.emit(LegOpened, leg_id=leg_id, role="inbound", party=party)
         conv.attach_leg(_inbound_leg(conv, leg_id, party, io))
@@ -531,11 +553,11 @@ class Runtime:
             raise AdmissionRejected(decision)
         conv = Conversation(self, bundle, conversation_id, state=state, events=events)
         self.conversations[conversation_id] = conv
-        if self.memory is not None:
-            items = self.memory.read(state.tenant_id, state.customer_id, self.clock.now())
-            conv.memory_texts = [
-                str(i.content.get("text") or canonical_json(i.content)) for i in items
-            ]
+        if state.memory_captured:
+            conv.memory_texts = list(state.memory_texts)
+        else:
+            await conv.load_memory()
+        conv._knowledge.update(state.knowledge)
         for leg in list(state.legs.values()):
             if leg.open and leg.role == "outbound_child":
                 await conv.emit(LegClosed, leg_id=leg.leg_id, reason="lost_in_recovery")

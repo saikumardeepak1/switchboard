@@ -13,6 +13,11 @@ keeping its real effects (a read tool that ran still produced evidence).
 Evidence. Policy rules read `evidence.<key>`. Keys come only from an explicit `evidence` mapping
 inside a successful tool result or a child call result, so a tool decides which of its fields are
 policy facts and the model cannot write one.
+
+Grounding inputs. The gate checks spoken claims against tool results, child results, retrieved
+knowledge text and memory read at setup. All four are in the log (`knowledge.retrieved` and
+`memory.loaded` carry their text when content capture is on), so `grounding_evidence()` on a
+replayed state is exactly what the live gate saw.
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ from switchboard.core import (
     KnowledgeRetrieved,
     LegClosed,
     LegOpened,
+    MemoryLoaded,
     PolicyVerdict,
     ProcedureAdvanced,
     SpeechPlayed,
@@ -43,6 +49,7 @@ from switchboard.core import (
     TurnSpeculationCancelled,
     TurnSpeculationStarted,
 )
+from switchboard.grounding import Evidence
 from switchboard.policy.procedure import tool_succeeded
 
 # Verdicts with these rule ids are runtime refusals, not policy denials the model must repair.
@@ -120,6 +127,11 @@ class ConversationState:
     completed_steps: list[str] = field(default_factory=list)
     child_results: dict[str, dict[str, Any]] = field(default_factory=dict)
     knowledge_ids: list[str] = field(default_factory=list)
+    # Retrieved text by fact or document id, in first-retrieved order.
+    knowledge: dict[str, str] = field(default_factory=dict)
+    memory_texts: list[str] = field(default_factory=list)
+    # A `memory.loaded` event carried its text, so recovery need not read memory again.
+    memory_captured: bool = False
     handoffs: list[str] = field(default_factory=list)
     compensations: list[str] = field(default_factory=list)
     ended: bool = False
@@ -130,6 +142,14 @@ class ConversationState:
 
     def executed(self, tool: str) -> list[CallState]:
         return [c for c in self.calls.values() if c.tool == tool and c.executed]
+
+    def grounding_evidence(self) -> Evidence:
+        """The grounding gate's evidence: tool and child results, knowledge text, memory."""
+        return Evidence(
+            tool_results=[*self.tool_results, *self.child_results.values()],
+            facts=list(self.knowledge.values()),
+            memory=self.memory_texts,
+        )
 
     def pending_calls(self) -> list[CallState]:
         """Calls the policy allowed whose execution was never recorded, in proposal order."""
@@ -315,6 +335,12 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
             for fact_id in event.fact_ids:
                 if fact_id not in state.knowledge_ids:
                     state.knowledge_ids.append(fact_id)
+            for fact_id, text in zip(event.fact_ids, event.texts, strict=False):
+                state.knowledge[fact_id] = text
+        case MemoryLoaded():
+            if event.texts or event.count == 0:
+                state.memory_texts = list(event.texts)
+                state.memory_captured = True
         case HandoffRequested():
             state.handoffs.append(event.reason)
         case ConversationEnded():

@@ -27,6 +27,7 @@ CATALOG = {
     "procedure.advanced",
     "child.result",
     "knowledge.retrieved",
+    "memory.loaded",
     "handoff.requested",
     "conversation.ended",
 }

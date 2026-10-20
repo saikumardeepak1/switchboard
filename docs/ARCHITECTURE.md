@@ -119,7 +119,8 @@ Event catalog (type string, payload fields):
 | `speech.played` | utterance_id, text_played, interrupted (bool) |
 | `procedure.advanced` | step, state |
 | `child.result` | child_leg_id, result |
-| `knowledge.retrieved` | fact_ids, as_of |
+| `knowledge.retrieved` | fact_ids, as_of, texts (empty with content capture off) |
+| `memory.loaded` | count, texts (empty with content capture off) |
 | `handoff.requested` | reason |
 | `conversation.ended` | outcome |
 

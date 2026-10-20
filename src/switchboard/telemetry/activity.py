@@ -34,6 +34,7 @@ from switchboard.core.events import (
     KnowledgeRetrieved,
     LegClosed,
     LegOpened,
+    MemoryLoaded,
     PolicyVerdict,
     ProcedureAdvanced,
     SpeechPlayed,
@@ -244,6 +245,8 @@ def _describe(e: AnyEvent) -> str:
             return f"Child leg {e.child_leg_id} returned {len(e.result)} fields"
         case KnowledgeRetrieved():
             return f"Retrieved {len(e.fact_ids)} facts"
+        case MemoryLoaded():
+            return f"Loaded {e.count} memory items"
         case HandoffRequested():
             return f"Handoff requested: {e.reason}"
         case ConversationEnded():
