@@ -1,0 +1,19 @@
+procedure:
+  steps: [greet, verify_identity, resolve, close]
+  require_before:
+    lookup_order: [verify_identity]
+    mark_delivered: [verify_identity]
+  completes:
+    verify_identity: verify_identity
+rules:
+  - id: refund_limit
+    when: {tool: issue_refund}
+    require: "args.amount <= 25"
+    hint: "Refunds above $25 need a human. Offer a handoff."
+  - id: delivered_needs_confirmation
+    when: {tool: mark_delivered}
+    require: "evidence.customer_confirmed_address == true"
+    hint: "Confirm the address change with the customer first, by calling them if needed."
+  - id: one_refund_per_conversation
+    when: {tool: issue_refund}
+    require: "count(tool.executed, tool=issue_refund) < 1"
