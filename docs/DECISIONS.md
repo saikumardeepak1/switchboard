@@ -131,6 +131,11 @@ exempt from the grounding gate only if it contains no claims.
 **Evidence.** SALMONN-duo delegates 16% of easy and 61% of hard turns at equal accuracy;
 RouteLLM cut cost by more than 2x at 95% quality. The LLM is the largest variable cost per minute.
 
+**Implementation note (2026-10).** Bridge speech is a fixed phrase from `agent.yaml`
+`bridge_phrases`, not talker output: the leg speaks one once a running tool has left the caller
+`bridge_after_ms` (default 700) of silence on a committed turn. Each phrase goes through the gate
+and is dropped if it carries any claim.
+
 ## ADR-009: Side effects are idempotent activities with compensations in the spec
 
 **Decision.** A tool with side effects declares `effect: write`, an idempotency key derivation

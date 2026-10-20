@@ -153,6 +153,7 @@ class Leg:
         # Tier 3 verdicts in flight; cancelled with the leg so none outlives it.
         self._verdicts: set[asyncio.Task[GateDecision]] = set()
         self._ticker: asyncio.Task[None] | None = None
+        self._bridges = 0
         self.closed = False
 
     # lifecycle
@@ -625,16 +626,56 @@ class Leg:
         if self.role == "outbound_child" and call.name == "report_result":
             await conv.finish_child(self, call, proposed.event_id)
             return "stop"
-        await conv.execute(
-            self.leg_id,
-            call.call_id,
-            call.name,
-            dict(call.args),
-            intent=conv.state.calls[call.call_id].intent,
-            speculative=token.speculative,
-            causation_id=proposed.event_id,
-        )
+        bridge = asyncio.create_task(self._bridge(ctx), name=f"bridge:{call.call_id}")
+        try:
+            await conv.execute(
+                self.leg_id,
+                call.call_id,
+                call.name,
+                dict(call.args),
+                intent=conv.state.calls[call.call_id].intent,
+                speculative=token.speculative,
+                causation_id=proposed.event_id,
+            )
+        finally:
+            bridge.cancel()
         return "ok"
+
+    async def _bridge(self, ctx: TurnContext) -> None:
+        """Fill the silence of a slow tool with a fixed phrase from the bundle (ADR-008).
+
+        It speaks once the caller has heard `bridge_after_ms` of silence on a committed turn,
+        and only a phrase the gate finds no claim in: bridge speech must never state a fact.
+        """
+        config = self.conversation.bundle.config
+        if not config.bridge_phrases:
+            return
+        await ctx.committed.wait()
+        while True:
+            await self.speaker.drain()
+            await self._clock.sleep(config.bridge_after_ms / 1000.0)
+            if not self.speaker.speaking:
+                break
+        if self.closed:
+            return
+        phrase = config.bridge_phrases[self._bridges % len(config.bridge_phrases)]
+        decision = self.conversation.gate.review(phrase, self.conversation.grounding_evidence())
+        if decision.claims or decision.decision == "block":
+            return
+        utterance_id = f"{ctx.turn_id}/bridge{self._bridges}"
+        self._bridges += 1
+        await self.conversation.emit(
+            SpeechSentenceGated,
+            leg_id=self.leg_id,
+            causation_id=ctx.anchor_id,
+            utterance_id=utterance_id,
+            sentence=phrase,
+            decision="release",
+            tier=decision.tier,
+            claims=[],
+        )
+        self.speaker.say(Spoken(phrase, utterance_id))
+        self.speaker.say(Spoken("", utterance_id, end=True))
 
 
 def _to_signals(event: SttEvent, in_speech: bool) -> tuple[list[InputSignal], bool]:

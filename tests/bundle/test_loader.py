@@ -314,3 +314,14 @@ def test_rollback_on_defaults_to_nothing_and_takes_outcome_names(tmp_path: Path)
     bad = AGENT_YAML + "rollback_on: handoff_failed\n"
     with pytest.raises(BundleError, match="rollback_on"):
         load_bundle(write_bundle(tmp_path / "c", **{"agent.yaml": bad}))
+
+
+def test_bridge_settings_default_and_parse(tmp_path: Path) -> None:
+    config = load_bundle(write_bundle(tmp_path / "a")).config
+    assert config.bridge_phrases == () and config.bridge_after_ms == 700
+    agent = AGENT_YAML + "bridge_phrases: [One moment.]\nbridge_after_ms: 500\n"
+    config = load_bundle(write_bundle(tmp_path / "b", **{"agent.yaml": agent})).config
+    assert config.bridge_phrases == ("One moment.",) and config.bridge_after_ms == 500
+    bad = AGENT_YAML + "bridge_phrases: One moment.\n"
+    with pytest.raises(BundleError, match="bridge_phrases"):
+        load_bundle(write_bundle(tmp_path / "c", **{"agent.yaml": bad}))

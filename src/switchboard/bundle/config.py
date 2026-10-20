@@ -30,6 +30,8 @@ _TOP_KEYS = frozenset(
         "runtime_tools",
         "parties",
         "rollback_on",
+        "bridge_phrases",
+        "bridge_after_ms",
     }
 )
 _VOICE_KEYS = frozenset({"voice_id", "ttfb_s", "chars_per_s"})
@@ -101,6 +103,9 @@ class AgentConfig:
     parties: Mapping[str, PartyConfig] = field(default_factory=dict)
     # Conversation outcomes (and "turn_aborted") after which the runtime compensates writes.
     rollback_on: tuple[str, ...] = ()
+    # Fixed phrases spoken while a tool runs longer than `bridge_after_ms` (ADR-008).
+    bridge_phrases: tuple[str, ...] = ()
+    bridge_after_ms: int = 700
 
 
 def _mapping(value: object, where: str) -> Mapping[str, Any]:
@@ -244,6 +249,12 @@ def parse_agent_config(raw: object) -> AgentConfig:
     rollback_on = raw.get("rollback_on") or []
     if not isinstance(rollback_on, list) or not all(isinstance(o, str) for o in rollback_on):
         raise ConfigError("agent.yaml: rollback_on must be a list of outcome names")
+    bridges = raw.get("bridge_phrases") or []
+    if not isinstance(bridges, list) or not all(isinstance(p, str) and p for p in bridges):
+        raise ConfigError("agent.yaml: bridge_phrases must be a list of phrases")
+    bridge_after = _int(raw, "bridge_after_ms", where, AgentConfig.bridge_after_ms)
+    if bridge_after is None or bridge_after < 0:
+        raise ConfigError("agent.yaml: bridge_after_ms must be >= 0")
     parties = _parties(raw.get("parties") or {})
     if parties and "call_party" not in runtime_tools:
         raise ConfigError("agent.yaml: 'parties' needs runtime tool 'call_party'")
@@ -261,4 +272,6 @@ def parse_agent_config(raw: object) -> AgentConfig:
         runtime_tools=tuple(dict.fromkeys(runtime_tools)),
         parties=MappingProxyType(parties),
         rollback_on=tuple(dict.fromkeys(rollback_on)),
+        bridge_phrases=tuple(bridges),
+        bridge_after_ms=bridge_after,
     )
