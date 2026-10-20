@@ -273,7 +273,10 @@ check on the upgrade is optional on top.
 
 `ActivityStream` is a projection over the event store with filters (conversation, leg, type, time
 range) and frequency buckets for charts. The API serves it at `GET /v1/activity` and
-`GET /v1/activity/histogram`.
+`GET /v1/activity/histogram`. Every read needs a bearer token that a pluggable `Authenticator`
+resolves to a `Principal` (401 otherwise) and is scoped to that principal's tenant; another
+tenant's conversation is a 404. With content capture off, payloads show only the type and length
+of transcript text, tool arguments and results.
 
 ## Testing rules
 

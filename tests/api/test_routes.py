@@ -4,7 +4,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from fastapi.testclient import TestClient
 
-from switchboard.api import create_app
+from switchboard.api import Principal, StaticTokenAuthenticator, create_app
 from switchboard.telemetry.metrics import Registry
 from tests.telemetry.fixtures import conv_a_events, conv_b_events, seeded_store
 
@@ -19,7 +19,13 @@ def registry() -> Registry:
 @pytest.fixture
 def client(registry: Registry) -> TestClient:
     store = asyncio.run(seeded_store())
-    return TestClient(create_app(store, registry=registry, epoch_offset_s=1_700_000_000.0))
+    app = create_app(
+        store,
+        registry=registry,
+        epoch_offset_s=1_700_000_000.0,
+        authenticator=StaticTokenAuthenticator({"t0ken": Principal("acme")}),
+    )
+    return TestClient(app, headers={"Authorization": "Bearer t0ken"})
 
 
 def test_healthz(client: TestClient) -> None:
@@ -79,9 +85,10 @@ def test_activity_filters(client: TestClient) -> None:
         params=[("type", "policy."), ("type", "handoff."), ("conversation_id", "conv_a")],
     )
     assert {i["type"] for i in r.json()["items"]} == {"policy.verdict", "handoff.requested"}
-    r = client.get("/v1/activity", params={"q": "colleague", "order": "asc"})
-    types = [i["type"] for i in r.json()["items"]]
-    assert types == ["speech.sentence_gated", "speech.played"]
+    # Content capture is off, so search sees tool names but not what anyone said.
+    assert client.get("/v1/activity", params={"q": "colleague"}).json()["items"] == []
+    r = client.get("/v1/activity", params={"q": "lookup_order", "conversation_id": "conv_a"})
+    assert {i["type"] for i in r.json()["items"]} == {"tool.proposed", "tool.executed"}
     r = client.get("/v1/activity", params={"leg_id": "leg_x", "since": 0, "until": 2})
     assert len(r.json()["items"]) == 2
 
@@ -170,6 +177,7 @@ def test_activity_page_html(client: TestClient) -> None:
     html = r.text
     assert html.lstrip().lower().startswith("<!doctype html>")
     assert "/v1/activity/histogram" in html
+    assert "Bearer " in html
     assert "/v1/activity?" in html or "'/v1/activity'" in html
     assert 'createElementNS(NS, "svg")' in html
     assert "<script src" not in html

@@ -23,7 +23,7 @@ from tests.telemetry.fixtures import b, conv_a_events, conv_b_events, seeded_sto
 
 
 async def stream() -> ActivityStream:
-    return ActivityStream(await seeded_store())
+    return ActivityStream(await seeded_store(), capture_content=True)
 
 
 ALL = len(conv_a_events()) + len(conv_b_events())

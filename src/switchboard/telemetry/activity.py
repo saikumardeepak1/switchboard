@@ -10,6 +10,11 @@ new events are appended between requests.
 Type filters accept exact types (`policy.verdict`) and prefixes ending in `.` or `.*`
 (`policy.`, `tool.*`). Patterns are resolved against the event catalog up front, so a typo is
 an error instead of a silently empty page. `since` is inclusive, `until` exclusive.
+
+`tenant_id` scopes a query to conversations whose `conversation.started` names that tenant. With
+content capture off (the default, ADR-015) transcript text, tool arguments and results, gated
+sentences, child results and retrieved text are replaced by `{"redacted": type, "length": n}`
+in payloads and left out of summaries, and text search runs over the redacted payload.
 """
 
 from __future__ import annotations
@@ -63,6 +68,44 @@ _ENVELOPE = frozenset(
 )
 
 
+# Event fields that carry what a person said or what a tool returned.
+CONTENT_FIELDS: dict[str, tuple[str, ...]] = {
+    "turn.committed": ("text",),
+    "turn.backchannel": ("text",),
+    "turn.speculation_started": ("partial_text",),
+    "tool.proposed": ("args",),
+    "tool.executed": ("result",),
+    "tool.compensated": ("result",),
+    "speech.sentence_gated": ("sentence", "claims"),
+    "speech.played": ("text_played",),
+    "child.result": ("result",),
+    "knowledge.retrieved": ("texts",),
+    "memory.loaded": ("texts",),
+    "leg.opened": ("goal",),
+}
+
+
+def _shape(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {"redacted": "null", "length": 0}
+    if isinstance(value, str):
+        return {"redacted": "string", "length": len(value)}
+    if isinstance(value, dict):
+        return {"redacted": "object", "length": len(value)}
+    if isinstance(value, list | tuple):
+        return {"redacted": "array", "length": len(value)}
+    return {"redacted": type(value).__name__, "length": 1}
+
+
+def payload_of(event: AnyEvent, *, capture_content: bool) -> dict[str, Any]:
+    payload = event.model_dump(mode="json", exclude=set(_ENVELOPE))
+    if not capture_content:
+        for name in CONTENT_FIELDS.get(event.type, ()):
+            if name in payload:
+                payload[name] = _shape(payload[name])
+    return payload
+
+
 class InvalidFilter(ValueError):
     """A filter value the stream cannot serve. `field` names the offending parameter."""
 
@@ -83,6 +126,8 @@ class ActivityFilter:
     limit: int = 50
     cursor: str | None = None
     order: Order = "desc"
+    # Only conversations of this tenant. None means every tenant (internal callers only).
+    tenant_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,9 +243,34 @@ def severity(event: AnyEvent) -> Severity:
     return "info"
 
 
-def describe(event: AnyEvent) -> str:
-    """One-line human summary of an event."""
-    return _clip(_describe(event))
+def describe(event: AnyEvent, *, capture_content: bool = True) -> str:
+    """One-line human summary of an event. Without content capture it names no content."""
+    return _clip(_describe(event) if capture_content else _describe_redacted(event))
+
+
+def _describe_redacted(e: AnyEvent) -> str:
+    match e:
+        case LegOpened():
+            return f"{e.party} leg opened ({e.role})"
+        case TurnSpeculationStarted():
+            return f"Speculating on {len(e.partial_text)} chars"
+        case TurnBackchannel():
+            return "Backchannel while the agent spoke"
+        case TurnCommitted():
+            return f"Turn committed after {e.endpointing_ms:.0f} ms endpointing"
+        case ToolProposed():
+            return f"Proposed {e.tool}"
+        case ToolExecuted():
+            if tool_error(e) is not None:
+                return f"{e.tool} failed"
+            return f"Executed {e.tool}" + (" (replayed from ledger)" if e.replayed else "")
+        case SpeechSentenceGated():
+            verb = {"release": "Released", "block": "Blocked", "escalate": "Escalated"}
+            return f"{verb[e.decision]} sentence (tier {e.tier}, {len(e.sentence)} chars)"
+        case SpeechPlayed():
+            cut = " (interrupted)" if e.interrupted else ""
+            return f"Played{cut} {len(e.text_played)} chars"
+    return _describe(e)
 
 
 def _describe(e: AnyEvent) -> str:
@@ -265,7 +335,7 @@ def _clip(text: str) -> str:
     return line if len(line) <= SUMMARY_MAX else line[: SUMMARY_MAX - 3] + "..."
 
 
-def to_item(event: AnyEvent) -> ActivityItem:
+def to_item(event: AnyEvent, *, capture_content: bool = True) -> ActivityItem:
     return ActivityItem(
         at=event.at,
         conversation_id=event.conversation_id,
@@ -275,8 +345,8 @@ def to_item(event: AnyEvent) -> ActivityItem:
         bundle_id=event.bundle_id,
         type=event.type,
         severity=severity(event),
-        summary=describe(event),
-        payload=event.model_dump(mode="json", exclude=set(_ENVELOPE)),
+        summary=describe(event, capture_content=capture_content),
+        payload=payload_of(event, capture_content=capture_content),
     )
 
 
@@ -310,8 +380,9 @@ def decode_cursor(cursor: str) -> _Key:
 
 
 class ActivityStream:
-    def __init__(self, store: EventStore) -> None:
+    def __init__(self, store: EventStore, *, capture_content: bool = False) -> None:
         self._store = store
+        self.capture_content = capture_content
 
     async def query(self, filters: ActivityFilter) -> ActivityPage:
         if not 1 <= filters.limit <= MAX_LIMIT:
@@ -327,7 +398,7 @@ class ActivityStream:
         page = events[: filters.limit]
         more = len(events) > filters.limit
         return ActivityPage(
-            items=[to_item(e) for e in page],
+            items=[to_item(e, capture_content=self.capture_content) for e in page],
             next_cursor=encode_cursor(_key(page[-1])) if more else None,
         )
 
@@ -372,6 +443,18 @@ class ActivityStream:
             for i, c in enumerate(counters)
         ]
 
+    async def tenant_conversations(self, tenant_id: str) -> set[str]:
+        started = self._store.read_all(types={"conversation.started"})
+        return {
+            e.conversation_id
+            async for e in started
+            if isinstance(e, ConversationStarted) and e.tenant_id == tenant_id
+        }
+
+    def _payload_text(self, event: AnyEvent) -> str:
+        payload = payload_of(event, capture_content=self.capture_content)
+        return json.dumps(payload, ensure_ascii=False).lower()
+
     async def summary(self, conversation_id: str) -> ConversationSummary | None:
         events = await self._store.read(conversation_id)
         if not events:
@@ -394,6 +477,9 @@ class ActivityStream:
             source: Iterable[AnyEvent] = await self._store.read(f.conversation_id)
         else:
             source = [e async for e in self._store.read_all(types=_as_set(types), since=f.since)]
+        if f.tenant_id is not None:
+            owned = await self.tenant_conversations(f.tenant_id)
+            source = [e for e in source if e.conversation_id in owned]
         needle = f.text.lower() if f.text else None
         out: list[AnyEvent] = []
         for e in source:
@@ -405,7 +491,7 @@ class ActivityStream:
                 continue
             if f.leg_id is not None and e.leg_id != f.leg_id:
                 continue
-            if needle is not None and needle not in _payload_text(e):
+            if needle is not None and needle not in self._payload_text(e):
                 continue
             out.append(e)
         return out
@@ -413,11 +499,6 @@ class ActivityStream:
 
 def _as_set(types: frozenset[str] | None) -> set[str] | None:
     return set(types) if types is not None else None
-
-
-def _payload_text(event: AnyEvent) -> str:
-    payload = event.model_dump(mode="json", exclude=set(_ENVELOPE))
-    return json.dumps(payload, ensure_ascii=False).lower()
 
 
 def summarize(events: Sequence[AnyEvent]) -> ConversationSummary:
