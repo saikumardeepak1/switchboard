@@ -19,6 +19,35 @@ courier ──call──►  ┌────────────────
 That flow is the example agent in [`examples/delivery_support`](examples/delivery_support), and it
 runs end to end in the test suite on a virtual clock in milliseconds.
 
+## See it run
+
+```
+make demo
+```
+
+About a second, no API keys. It prints the call above as a transcript, then the same call with a
+model that misbehaves. From Part 2 ([full output](docs/demo-output.txt)): the courier asks about
+pay while the customer leg is still open, a wrong dollar amount is blocked before TTS, an early
+`mark_delivered` is blocked by policy, and the real one runs once after the customer confirms.
+
+```
+ 0:25.3  COURIER  While I wait, what is my pay this week?
+ 0:25.9    tool  get_courier_pay(courier_id=C-77) -> week_total=182.4, deliveries=23
+ 0:26.0  AGENT -> courier  Let me check.
+ 0:26.7    BLOCKED speech "You've earned $112.40 this week across 23 deliveries.": unsupported $112.40 (evidence: $182.40)
+ 0:27.2    BLOCKED mark_delivered: delivered_needs_confirmation
+ 0:27.2            hint to model: The address change is not confirmed. Check the chat, or call the customer with call_party to confirm it first.
+ 0:27.3  AGENT -> courier  You've earned $182.40 this week across 23 deliveries.
+ 0:27.7  CUSTOMER Yes, I asked the courier to bring it to my home.
+ 0:28.2    tool  report_result(confirmed=true, notes=Asked for home delivery.) -> recorded=true
+ 0:28.2    result customer confirmed
+ 0:28.3  AGENT -> customer  Thanks, I'll let the courier know. Goodbye.
+ 0:28.7    tool  mark_delivered(order_id=48213, location=customer's home address) -> delivered  [key mark_delivered:41e9ad9c...]
+```
+
+`make serve` serves the same simulated calls over the API, with an activity stream page at the
+`/activity` URL it prints.
+
 ## Why this exists
 
 I built this after studying how production voice support agents are put together, in particular
@@ -140,7 +169,7 @@ what a production deployment would attack next (confirmation read-back, DTMF fal
 
 ```bash
 uv sync
-make check     # ruff, format, mypy --strict, 1,015 tests, about 20 s, no network or API keys
+make check     # ruff, format, mypy --strict, 1,025 tests, about 20 s, no network or API keys
 make bench     # all benchmarks, about 60 s
 make serve     # API plus the activity stream page, seeded with simulated calls
 ```
