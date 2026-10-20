@@ -119,6 +119,10 @@ class _Token:
         return "end of input" if self.kind == "eof" else repr(self.text)
 
 
+# Bounds on what a bundle author can write, so a policy file cannot make the parser do
+# unbounded work (Python's int() refuses past 4300 digits with a bare ValueError).
+MAX_NUMBER_DIGITS: Final = 32
+MAX_TOKEN_CHARS: Final = 256
 _TWO_CHAR_OPS: Final = frozenset({"==", "!=", "<=", ">="})
 _ONE_CHAR_OPS: Final = frozenset("<>=()[],.-")
 _ESCAPES: Final = {"\\": "\\", "'": "'", '"': '"', "n": "\n", "t": "\t"}
@@ -130,6 +134,21 @@ def _is_name_start(ch: str) -> bool:
 
 def _is_name_char(ch: str) -> bool:
     return _is_name_start(ch) or ("0" <= ch <= "9")
+
+
+def _check_number(text: str, line: int, col: int, source: str) -> None:
+    digits = sum(ch.isdigit() for ch in text)
+    if digits > MAX_NUMBER_DIGITS:
+        raise ParseError(
+            f"numeric literal has {digits} digits (limit {MAX_NUMBER_DIGITS})", line, col, source
+        )
+
+
+def _check_length(text: str, line: int, col: int, source: str) -> None:
+    if len(text) > MAX_TOKEN_CHARS:
+        raise ParseError(
+            f"token is {len(text)} characters long (limit {MAX_TOKEN_CHARS})", line, col, source
+        )
 
 
 def _tokenize(source: str) -> list[_Token]:
@@ -152,15 +171,18 @@ def _tokenize(source: str) -> list[_Token]:
                 while i < n and "0" <= source[i] <= "9":
                     i += 1
                 text = source[start:i]
+                _check_number(text, line, start_col, source)
                 tokens.append(_Token("float", text, float(text), line, start_col))
             else:
                 text = source[start:i]
+                _check_number(text, line, start_col, source)
                 tokens.append(_Token("int", text, int(text), line, start_col))
             col += i - start
         elif _is_name_start(ch):
             while i < n and _is_name_char(source[i]):
                 i += 1
             text = source[start:i]
+            _check_length(text, line, start_col, source)
             tokens.append(_Token("name", text, text, line, start_col))
             col += i - start
         elif ch in "'\"":
@@ -190,6 +212,7 @@ def _tokenize(source: str) -> list[_Token]:
                 else:
                     col += 1
                 i += 1
+            _check_length(source[start:i], start_line, start_col, source)
             tokens.append(_Token("str", source[start:i], "".join(chars), start_line, start_col))
         elif source[i : i + 2] in _TWO_CHAR_OPS:
             text = source[i : i + 2]

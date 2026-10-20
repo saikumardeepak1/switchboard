@@ -325,3 +325,29 @@ def test_bridge_settings_default_and_parse(tmp_path: Path) -> None:
     bad = AGENT_YAML + "bridge_phrases: One moment.\n"
     with pytest.raises(BundleError, match="bridge_phrases"):
         load_bundle(write_bundle(tmp_path / "c", **{"agent.yaml": bad}))
+
+
+@pytest.mark.parametrize(
+    ("require", "fragment"),
+    [
+        ("args.amount <= " + "9" * 5000, "numeric literal"),
+        ("args.amount <= " + "9" * 33, "numeric literal"),
+        ("args.amount <= 1." + "5" * 40, "numeric literal"),
+        ("args." + "a" * 300 + " == 1", "token"),
+        ("args.note == '" + "x" * 300 + "'", "token"),
+    ],
+    ids=["5000_digits", "33_digits", "long_fraction", "long_name", "long_string"],
+)
+def test_oversized_literals_and_tokens_are_bundle_errors(
+    tmp_path: Path, require: str, fragment: str
+) -> None:
+    policy = f'rules:\n  - id: big\n    when: {{tool: charge}}\n    require: "{require}"\n'
+    root = write_bundle(tmp_path / "mini", **{"policies/main.yaml": policy})
+    with pytest.raises(BundleError, match=fragment):
+        load_bundle(root)
+
+
+def test_a_32_digit_literal_is_still_fine(tmp_path: Path) -> None:
+    require = "args.amount <= " + "9" * 32
+    policy = f"rules:\n  - id: ok\n    when: {{tool: charge}}\n    require: '{require}'\n"
+    load_bundle(write_bundle(tmp_path / "mini", **{"policies/main.yaml": policy}))
