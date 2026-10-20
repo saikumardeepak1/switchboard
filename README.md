@@ -4,16 +4,20 @@ A runtime for enterprise voice agents that can hold several live calls at once, 
 action before it runs, and refuse to say a number it cannot back up.
 
 ```
-courier ──call──►  ┌──────────────────────────── conversation (one writer, one log) ───────────────────────────┐
-                   │  leg: courier   "I delivered it to their home, can you mark it delivered?"                │
-                   │     ├─ verify_courier ✓   lookup_order ✓   chat shows no address change                   │
-                   │     ├─ mark_delivered  ✗  policy: delivered_needs_confirmation                            │
-                   │     └─ call_party(customer) ──► leg: customer  "Did you ask for delivery to your home?"    │
-                   │                                         └─ "Yes, I did."  → child.result confirmed        │
-                   │     ├─ mark_delivered  ✓  (exactly once, idempotency key in the ledger)                   │
-                   │     └─ "All set, it's marked delivered. Your pay this week is $182.40."              │
-                   │           ← gated before TTS: $182.40 matches the get_courier_pay result                  │
-                   └───────────────────────────────────────────────────────────────────────────────────────────┘
+COURIER CALL                    CUSTOMER CALL
+"I delivered it to their home,
+ can you mark it delivered?"
+  verify_courier     ok
+  lookup_order       ok
+  mark_delivered     BLOCKED by policy
+  call_party ─────────────────► "Did you ask for
+                                  delivery to your home?"
+                                 "Yes, I did."
+             ◄───────────────── confirmed
+  mark_delivered     ok, exactly once
+"All set. Your pay this week is
+ $182.40."  checked against the
+            pay tool before speaking
 ```
 
 That flow is the example agent in [`examples/delivery_support`](examples/delivery_support), and it
@@ -31,19 +35,20 @@ pay while the customer leg is still open, a wrong dollar amount is blocked befor
 `mark_delivered` is blocked by policy, and the real one runs once after the customer confirms.
 
 ```
- 0:25.3  COURIER  While I wait, what is my pay this week?
- 0:25.9    tool  get_courier_pay(courier_id=C-77) -> week_total=182.4, deliveries=23
- 0:26.0  AGENT -> courier  Let me check.
- 0:26.7    BLOCKED speech "You've earned $112.40 this week across 23 deliveries.": unsupported $112.40 (evidence: $182.40)
- 0:27.2    BLOCKED mark_delivered: delivered_needs_confirmation
- 0:27.2            hint to model: The address change is not confirmed. Check the chat, or call the customer with call_party to confirm it first.
- 0:27.3  AGENT -> courier  You've earned $182.40 this week across 23 deliveries.
- 0:27.7  CUSTOMER Yes, I asked the courier to bring it to my home.
- 0:28.2    tool  report_result(confirmed=true, notes=Asked for home delivery.) -> recorded=true
- 0:28.2    result customer confirmed
- 0:28.3  AGENT -> customer  Thanks, I'll let the courier know. Goodbye.
- 0:28.7    tool  mark_delivered(order_id=48213, location=customer's home address) -> delivered  [key mark_delivered:41e9ad9c...]
+0:25.3 COURIER  While I wait, what is my pay this week?
+0:25.9   tool   get_courier_pay -> week_total=182.4
+0:26.7   BLOCKED speech "You've earned $112.40 ..."
+                unsupported $112.40 (evidence: $182.40)
+0:27.2   BLOCKED mark_delivered:
+                delivered_needs_confirmation
+0:27.3 AGENT    You've earned $182.40 this week ...
+0:27.7 CUSTOMER Yes, I asked the courier to bring it
+                to my home.
+0:28.2   result customer confirmed
+0:28.7   tool   mark_delivered(order_id=48213) -> delivered
 ```
+
+Lines are trimmed to fit here; the untrimmed run is in [docs/demo-output.txt](docs/demo-output.txt).
 
 `make serve` serves the same simulated calls over the API, with an activity stream page at the
 `/activity` URL it prints.
