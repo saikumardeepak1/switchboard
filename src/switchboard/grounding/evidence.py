@@ -6,7 +6,12 @@ tool result and "twelve fifty" in a sentence meet at the same canonical value.
 
 Matching rules (ADR-005):
 
-- money, number, identifier, date: exact. Identifiers ignore case and separators. A date said
+- money, number, identifier, date: exact. Identifiers ignore case and separators.
+- values are typed by where they sit. A money claim matches only money evidence: a number under a
+  money key (amount, price, total, refund, pay, fee, cost, ..., `*_cents`, `*_dollars`) or a
+  currency amount written in text. An identifier matches a string, or a number under an id-like
+  key. Any number matches a number claim. So `eta_minutes: 20` never backs "$20", and
+  `order_id: "48213"` never backs "48,213 dollars". A date said
   without a year matches dated evidence on month and day; a date said with a year needs the year.
 - time: exact, or within 5 minutes when the claim is hedged. A time said without am or pm matches
   either half of the day.
@@ -59,6 +64,14 @@ _ID_KEY_HINTS = (
     "case",
     "booking",
 )
+_MONEY_KEY_HINTS = frozenset(
+    {
+        "amount", "price", "total", "subtotal", "refund", "refunded", "pay", "paid", "payout",
+        "fee", "fees", "cost", "costs", "charge", "charged", "balance", "credit", "tip", "tips",
+        "earnings", "earned", "wage", "wages", "salary", "bonus", "fare", "cents", "cent",
+        "dollars", "dollar", "usd", "money", "owed", "due", "deposit", "discount", "payment",
+    }
+)  # fmt: skip
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
 
@@ -68,6 +81,14 @@ def _id_key(value: str) -> str:
 
 def _key_parts(key: str | None) -> list[str]:
     return _WORD_RE.findall(key.lower()) if key else []
+
+
+def _money_key(parts: list[str]) -> bool:
+    return any(p in _MONEY_KEY_HINTS for p in parts)
+
+
+def _id_like_key(parts: list[str]) -> bool:
+    return any(p in _ID_KEY_HINTS for p in parts)
 
 
 def _norm(d: Decimal) -> int | Decimal:
@@ -169,22 +190,23 @@ class Evidence:
     def _add_number(self, d: Decimal, key: str | None, *, is_int: bool) -> None:
         parts = _key_parts(key)
         self._numbers.add(_norm(d))
-        if any("cent" in p for p in parts):
+        if any(p in ("cents", "cent") for p in parts):
             self._money.add(int(d))
-        elif _two_places(d):
+        elif _money_key(parts) and _two_places(d):
             self._money.add(int(d * 100))
         for part in parts:
             if part in _KEY_UNITS:
                 self._durations.add(int(d * _KEY_UNITS[part]))
-        if is_int:
+        if is_int and _id_like_key(parts):
             self._add_id(str(int(d)))
 
     def _add_text(self, text: str, key: str | None) -> None:
         self._words.update(_WORD_RE.findall(text.lower()))
+        parts = _key_parts(key)
         for claim in extract_claims(text):
-            self._index_claim(claim)
+            self._index_claim(claim, money_key=_money_key(parts), id_key=_id_like_key(parts))
         compact = _id_key(text)
-        id_like_key = any(p in _ID_KEY_HINTS for p in _key_parts(key))
+        id_like_key = _id_like_key(parts)
         has_space = bool(re.search(r"\s", text.strip()))
         has_digit = any(ch.isdigit() for ch in compact)
         if has_digit and len(compact) <= 40 and (id_like_key or not has_space):
@@ -193,16 +215,17 @@ class Evidence:
     def _add_id(self, display: str) -> None:
         self._ids.setdefault(_id_key(display), display)
 
-    def _index_claim(self, claim: Claim) -> None:
+    def _index_claim(self, claim: Claim, *, money_key: bool, id_key: bool) -> None:
         v = claim.value
         if claim.kind == "money" and isinstance(v, int):
             self._money.add(v)
             self._numbers.add(_norm(Decimal(v) / 100))
         elif claim.kind == "number" and isinstance(v, int | Decimal):
             self._numbers.add(v)
-            if _two_places(Decimal(v)):
+            # A bare number in text is money or an id only when its key says so.
+            if money_key and _two_places(Decimal(v)):
                 self._money.add(int(Decimal(v) * 100))
-            if isinstance(v, int) and "." not in claim.raw:
+            if id_key and isinstance(v, int) and "." not in claim.raw:
                 self._add_id(str(v))
         elif claim.kind == "time" and isinstance(v, int):
             self._times.add(v)
