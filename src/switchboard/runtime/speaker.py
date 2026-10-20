@@ -31,30 +31,18 @@ _EPS = 1e-9
 CORRECTION = "Sorry, I need to correct that last part, so please ignore it."
 
 
-class Spoken(str):
-    """A gated sentence on its way to TTS. A `str`, so it can sit in the turn engine's buffer.
+@dataclass(frozen=True, slots=True)
+class Spoken:
+    """A gated sentence on its way to TTS, as the turn engine buffers it.
 
     `end` marks the close of an utterance and carries no text. `verdict` is set for sentences
     still waiting on the tier 3 verifier.
     """
 
+    text: str
     utterance_id: str
-    end: bool
-    verdict: asyncio.Task[GateDecision] | None
-
-    def __new__(
-        cls,
-        text: str,
-        utterance_id: str,
-        *,
-        end: bool = False,
-        verdict: asyncio.Task[GateDecision] | None = None,
-    ) -> Spoken:
-        obj = super().__new__(cls, text)
-        obj.utterance_id = utterance_id
-        obj.end = end
-        obj.verdict = verdict
-        return obj
+    end: bool = field(default=False, kw_only=True)
+    verdict: asyncio.Task[GateDecision] | None = field(default=None, kw_only=True)
 
 
 @dataclass
@@ -185,7 +173,7 @@ class Speaker:
             self._utterance = u
         if item.verdict is not None and not await self._verified(u, item.verdict):
             return
-        await self._synthesize(u, str(item))
+        await self._synthesize(u, item.text)
 
     async def _verified(self, u: _Utterance, verdict: asyncio.Task[GateDecision]) -> bool:
         """Race the verifier against the audio already queued. False means drop the sentence."""

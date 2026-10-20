@@ -60,6 +60,7 @@ from switchboard.turn import (
     EndpointingConfig,
     EndpointingController,
     FinalTranscript,
+    GenerationContext,
     InputSignal,
     PartialTranscript,
     SpeculativeTurnEngine,
@@ -122,7 +123,9 @@ class Leg:
         self._endpointing = EndpointingController(
             EndpointingConfig(eager_threshold=eager_threshold)
         )
-        self._engine = SpeculativeTurnEngine(self._clock, self._generate)
+        self._engine: SpeculativeTurnEngine[Spoken, TurnContext] = SpeculativeTurnEngine(
+            self._clock, self._generate
+        )
         self.speaker = Speaker(
             io,
             self._clock,
@@ -133,7 +136,6 @@ class Leg:
         self._turn_lock = asyncio.Lock()
         self._signal_lock = asyncio.Lock()
         self._spec: TurnContext | None = None
-        self._next: TurnContext | None = None
         self._in_turn = False
         self._in_speech = False
         self._last_speech_at: float | None = None
@@ -258,8 +260,8 @@ class Leg:
         started = await self.conversation.emit(
             TurnSpeculationStarted, leg_id=self.leg_id, turn_id=turn_id, partial_text=signal.text
         )
-        self._spec = self._next = TurnContext(turn_id, started.event_id, signal.text)
-        await self._engine.handle(signal)
+        self._spec = ctx = TurnContext(turn_id, started.event_id, signal.text)
+        await self._engine.handle(signal, ctx, turn_id=turn_id)
 
     async def _on_end(self, signal: TurnSignal) -> None:
         spec, self._spec = self._spec, None
@@ -280,8 +282,7 @@ class Leg:
             spec.committed.set()
             return
         if spec is not None:
-            # The final text differs from the speculation. Cancel it (and wait for its task)
-            # before setting `_next`, so the old generation can never pick up the new context.
+            # The final text differs from the speculation: record its cancellation first.
             self._spec = spec
             await self._cancel_speculation()
         turn_id = self.conversation.new_id("turn")
@@ -294,8 +295,7 @@ class Leg:
         )
         ctx = TurnContext(turn_id, committed.event_id, signal.text)
         ctx.committed.set()
-        self._next = ctx
-        await self._engine.handle(signal)
+        await self._engine.handle(signal, ctx, turn_id=turn_id)
 
     async def _cancel_speculation(self) -> None:
         spec, self._spec = self._spec, None
@@ -312,16 +312,14 @@ class Leg:
         while True:
             try:
                 async for item in self._engine.committed_stream():
-                    if isinstance(item, Spoken):
-                        self.speaker.say(item)
+                    self.speaker.say(item)
             except Exception as exc:
                 self.conversation.record_failure(exc)
 
     async def _agent_turn(self, ctx: TurnContext) -> None:
         try:
             async for item in self._run_turn(ctx, CancelToken(speculative=False)):
-                if isinstance(item, Spoken):
-                    self.speaker.say(item)
+                self.speaker.say(item)
         except Exception as exc:
             self.conversation.record_failure(exc)
 
@@ -359,14 +357,10 @@ class Leg:
 
     # the brain loop
 
-    async def _generate(self, text: str, token: CancelToken) -> AsyncIterator[str]:
-        # The engine passes only (text, token). Every launch is preceded by exactly one write to
-        # `_next`, and any earlier generation has been cancelled and awaited by then, so the
-        # slot holds this launch's context.
-        ctx, self._next = self._next, None
-        if ctx is None:
-            raise RuntimeError(f"leg {self.leg_id}: generation started without a turn context")
-        async for item in self._run_turn(ctx, token):
+    async def _generate(
+        self, text: str, gen: GenerationContext[TurnContext]
+    ) -> AsyncIterator[Spoken]:
+        async for item in self._run_turn(gen.payload, gen.token):
             yield item
 
     async def _run_turn(self, ctx: TurnContext, token: CancelToken) -> AsyncIterator[Spoken]:
