@@ -96,6 +96,21 @@ Most support hallucinations that hurt (wrong refund amount, wrong ETA) are numer
 **Cost.** Tier 1 has false positives on paraphrased numbers ("a couple of dollars"). Normalization
 handles common forms; ambiguous spans escalate rather than block.
 
+**Revision (2026-10).** Tier 2 now scores only claimless sentences that make a factual
+assertion: a capitalized word that does not open the sentence (a name, place or product; "I" is
+not one), or a policy-sensitive word (refund, deliver, cancel, charge, credit, waive, reimburse,
+inflected). Other claimless sentences are filler and release without a score. The benchmark
+showed why: the reference lexical scorer blocked about two thirds of filler such as "Let me check
+that for you." because it shares few words with any tool result, and a sentence with no fact in
+it has nothing a scorer could find unsupported. The rule lives in `grounding/gate.py`
+(`makes_assertion`). It is lexical, so an assertion with neither signal ("The customer confirmed
+the new address.") still releases unscored; that is the cost.
+
+The gate also gets the time of day now. `Runtime.day_start` (any clock reading at a local
+midnight; None by default, because `RealClock` is monotonic) gives the evidence a current minute,
+so "in about 20 minutes" checks against an ETA clock time as ETA minus now. Without it those
+sentences fail closed, as they did in every call before.
+
 ## ADR-006: Speculative turns with playback as the source of truth
 
 **Decision.** The turn engine starts brain generation on an eager end-of-turn signal and holds the

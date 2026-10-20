@@ -153,12 +153,19 @@ def summarize(data: dict[str, dict[str, Any]], timings: dict[str, float]) -> str
             ],
         ),
         "",
-        "False blocks by category (tier 1 only):",
+        "False blocks on clean sentences by category:",
         "",
         markdown_table(
-            ["category", "clean sentences", "false blocks", "rate"],
+            ["category", "clean sentences", "tier 1 only", "rate", "with lexical scorer", "rate"],
             [
-                [k, v["sentences"] - v["corrupted"], v["false_blocks"], pct(v["false_block_rate"])]
+                [
+                    k,
+                    v["sentences"] - v["corrupted"],
+                    v["false_blocks"],
+                    pct(v["false_block_rate"]),
+                    v["scored_false_blocks"],
+                    pct(v["scored_false_block_rate"]),
+                ]
                 for k, v in g["by_category"].items()
             ],
         ),

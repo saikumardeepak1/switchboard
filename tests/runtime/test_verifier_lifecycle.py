@@ -6,11 +6,11 @@ import asyncio
 
 from switchboard.grounding import Evidence, GroundingGate, VerifierVerdict
 
-from .harness import SimParty, World, every, make_world
+from .harness import GREETING, SimParty, World, every, make_world
 
 
 class MiddlingScorer:
-    """Sends every claimless sentence to tier 3."""
+    """Sends every claimless assertion to tier 3 (filler releases before a scorer sees it)."""
 
     def score(self, sentence: str, evidence: Evidence) -> float:
         return 0.5
@@ -123,6 +123,11 @@ async def test_a_failing_verifier_blocks_and_the_speaker_keeps_going() -> None:
     events = await world.events(conv)
     tier3 = [(e.sentence, e.decision) for e in every(events, "speech.sentence_gated", tier=3)]
     assert tier3 and all(decision == "block" for _, decision in tier3)
-    # Escalated sentences never reached TTS; the tier 1 grounded one did.
-    assert world.courier.tts.texts == ["You've earned $182.40 this week across 23 deliveries."]
+    # Escalated sentences never reached TTS; filler and the tier 1 grounded one did.
+    assert GREETING in [sentence for sentence, _ in tier3]
+    assert world.courier.tts.texts == [
+        "One moment.",
+        "Let me check.",
+        "You've earned $182.40 this week across 23 deliveries.",
+    ]
     await conv.end("resolved")

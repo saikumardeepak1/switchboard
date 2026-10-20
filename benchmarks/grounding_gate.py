@@ -242,6 +242,7 @@ def chunk(job: tuple[int, int]) -> dict[str, Any]:
             c["scored_released_corrupt"] += 1
         if not corrupted and not final_release:
             c["scored_false_block"] += 1
+            c[f"scored_false_block:{category}"] += 1
         # baseline: the verifier sees every sentence
         if baseline.supported(corrupted) and corrupted:
             c["baseline_released_corrupt"] += 1
@@ -267,6 +268,10 @@ def run(n: int | None = None, workers: int | None = None) -> dict[str, Any]:
             "false_blocks": c[f"false_block:{cat}"],
             "false_block_rate": ratio(
                 c[f"false_block:{cat}"], c[f"cat:{cat}"] - c[f"corrupted:{cat}"]
+            ),
+            "scored_false_blocks": c[f"scored_false_block:{cat}"],
+            "scored_false_block_rate": ratio(
+                c[f"scored_false_block:{cat}"], c[f"cat:{cat}"] - c[f"corrupted:{cat}"]
             ),
         }
         for cat in categories

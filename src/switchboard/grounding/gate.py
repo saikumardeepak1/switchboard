@@ -7,10 +7,18 @@ hedged claim outside its tolerance ("about $15"), or a spelled number with more 
 ("twelve fifty" as $12.50, 12:50 or 1250). The verifier settles it, and with no verifier the
 escalation fails closed. One exact miss in the sentence still blocks it.
 
-Tier 2 handles sentences with no checkable claim. With a `SentenceScorer` it releases at or above
-`release_at`, blocks at or below `block_at`, and escalates in between. Without a scorer a
-claimless sentence releases: it states no number, time, date, amount or ID that could be wrong,
-which is also the rule that lets bridge speech through (ADR-008).
+Tier 2 handles sentences with no checkable claim, and only those that make a factual assertion
+(`makes_assertion`): a capitalized word that does not start a sentence (a name, place or product,
+not "I"), or a policy-sensitive word (`POLICY_WORDS`: refund, deliver, cancel, charge, credit,
+waive, reimburse, in their inflections). Everything else is filler ("One moment.", "Let me check
+that for you.") and releases without a score: it carries no fact a scorer could check, and the
+reference lexical scorer blocked about two thirds of it for sharing few words with the evidence
+(ADR-005, Revision). With a `SentenceScorer`, an assertion releases at or above `release_at`,
+blocks at or below `block_at`, and escalates in between. Without a scorer a claimless sentence
+releases: it states no number, time, date, amount or ID that could be wrong, which is also the
+rule that lets bridge speech through (ADR-008). The rule is lexical and misses assertions made
+with neither signal ("The customer confirmed the new address."); a tier 2 model that needs those
+must be given a gate that does not filter, or the rule must grow.
 
 Tier 3 is the async `Verifier`. `review` never awaits it; it returns `escalate` and the caller
 runs `resolve` while earlier audio plays. With no verifier configured an escalation fails closed.
@@ -18,6 +26,7 @@ runs `resolve` while earlier audio plays. With no verifier configured an escalat
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
 
@@ -26,6 +35,42 @@ from switchboard.grounding.evidence import Evidence
 
 Decision = Literal["release", "block", "escalate"]
 Tier = Literal[1, 2, 3]
+
+POLICY_WORDS: frozenset[str] = frozenset(
+    {
+        "refund", "refunds", "refunded", "refunding",
+        "deliver", "delivers", "delivered", "delivering",
+        "cancel", "cancels", "cancelled", "canceled", "cancelling", "canceling", "cancellation",
+        "charge", "charges", "charged", "charging",
+        "credit", "credits", "credited", "crediting",
+        "waive", "waives", "waived", "waiving",
+        "reimburse", "reimburses", "reimbursed", "reimbursing", "reimbursement",
+    }
+)  # fmt: skip
+_CLAUSE_RE = re.compile(r"[^.!?]+")
+_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'\u2019-]*")
+
+
+def makes_assertion(sentence: str) -> bool:
+    """True when a claimless sentence still asserts something tier 2 should check.
+
+    A capitalized word that does not open its sentence (the first-person "I" and its
+    contractions aside) is taken as a named entity; a word in `POLICY_WORDS` is a statement
+    about an action with consequences. Either one makes the sentence an assertion.
+    """
+    for clause in _CLAUSE_RE.findall(sentence):
+        words = _WORD_RE.findall(clause)
+        for i, word in enumerate(words):
+            if word.lower() in POLICY_WORDS:
+                return True
+            if (
+                i > 0
+                and word[0].isupper()
+                and word != "I"
+                and not word.startswith(("I'", "I\u2019"))
+            ):
+                return True
+    return False
 
 
 @runtime_checkable
@@ -102,6 +147,8 @@ class GroundingGate:
     def _tier_two(self, sentence: str, evidence: Evidence) -> GateDecision:
         if self.scorer is None:
             return GateDecision("release", 2, (), (), "no checkable claims and no scorer")
+        if not makes_assertion(sentence):
+            return GateDecision("release", 2, (), (), "no checkable claims and no assertion")
         score = self.scorer.score(sentence, evidence)
         if not 0.0 <= score <= 1.0:
             raise ValueError(f"scorer returned {score}, expected a value in [0, 1]")

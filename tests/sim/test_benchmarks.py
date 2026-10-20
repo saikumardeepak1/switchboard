@@ -45,6 +45,7 @@ def test_grounding_gate_tier1_only_fails_escalations_closed_like_the_runtime() -
     assert r["tier1_caught"] + r["tier1_only_released_corrupt"] == r["corrupted"]
     eta = r["by_category"]["eta_minutes"]
     assert eta["corrupted"] > 0
+    assert "scored_false_block_rate" in r["by_category"]["claimless"]
 
 
 def test_speculation_latency_sweeps_the_eager_threshold() -> None:
