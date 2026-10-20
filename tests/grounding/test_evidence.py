@@ -103,6 +103,16 @@ def test_eta_minus_now_supports_duration() -> None:
     assert not evidence.supports(one("It arrives in 20 minutes."))
 
 
+def test_at_sets_now_on_a_view_without_touching_the_original() -> None:
+    evidence = Evidence(tool_results=[{"eta": "7:52 pm"}])
+    view = evidence.at(19 * 60 + 30)
+    assert view.supports(one("It arrives in 22 minutes."))
+    assert not evidence.supports(one("It arrives in 22 minutes."))
+    assert evidence.now_minutes is None
+    evidence.add({"eta": "8:10 pm"})
+    assert view.supports(one("It arrives in 40 minutes."))
+
+
 def test_eta_iso_timestamp_and_now() -> None:
     evidence = Evidence(tool_results=[{"eta": "2026-10-20T19:52:00Z"}], now_minutes=19 * 60 + 30)
     assert evidence.supports(one("It arrives in 22 minutes."))

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import dataclasses
 
+from switchboard.knowledge import parse_timestamp
 from switchboard.sim import (
     PERSONAS,
     AdversaryConfig,
     Persona,
     ScenarioResult,
+    SimConfig,
+    build_world,
     run_matrix,
     run_scenario,
 )
@@ -31,6 +34,16 @@ def test_happy_delivery_passes_every_assertion() -> None:
     assert result.cost.total > 0 and result.cost.minutes > 0
     assert result.voice_to_voice_ms and all(v > 0 for v in result.voice_to_voice_ms)
     assert result.failures == []
+
+
+def test_sim_runtime_knows_the_local_time_of_day_of_its_clock() -> None:
+    world = build_world(happy_delivery(), seed=1)
+    try:
+        assert world.runtime.day_start == parse_timestamp("2026-10-20T00:00:00-07:00")
+        assert world.runtime.minute_of_day(world.clock.now()) == 11 * 60 + 30
+    finally:
+        world.close()
+    assert SimConfig(day_start=None).day_start is None
 
 
 def test_same_seed_gives_identical_events_and_another_seed_does_not() -> None:

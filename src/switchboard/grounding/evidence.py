@@ -22,6 +22,7 @@ Matching rules (ADR-005):
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import difflib
 import re
@@ -147,6 +148,15 @@ class Evidence:
 
     def __repr__(self) -> str:
         return f"Evidence(ids={len(self._ids)}, numbers={len(self._numbers)})"
+
+    def at(self, now_minutes: int | None) -> Evidence:
+        """A read view of the same indexes with the current time of day set. Costs O(1).
+
+        The view shares the indexes, so values added to this evidence later show in it too.
+        """
+        view = copy.copy(self)
+        view.now_minutes = now_minutes
+        return view
 
     def union(self, other: Evidence) -> Evidence:
         """A new evidence set holding both. Costs the size of the two indexes, not a re-walk."""
