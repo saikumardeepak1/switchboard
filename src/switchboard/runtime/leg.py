@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from switchboard.brain import (
     BrainRequest,
@@ -149,6 +149,8 @@ class Leg:
         self._over_utterance: str | None = None
         self._tasks: set[asyncio.Task[None]] = set()
         self._agent_turns: set[asyncio.Task[None]] = set()
+        # Tier 3 verdicts in flight; cancelled with the leg so none outlives it.
+        self._verdicts: set[asyncio.Task[GateDecision]] = set()
         self._ticker: asyncio.Task[None] | None = None
         self.closed = False
 
@@ -163,7 +165,7 @@ class Leg:
         if self.closed:
             return
         self.closed = True
-        tasks = [*self._tasks, *self._agent_turns]
+        tasks: list[asyncio.Task[Any]] = [*self._tasks, *self._agent_turns, *self._verdicts]
         if self._ticker is not None:
             tasks.append(self._ticker)
         current = asyncio.current_task()
@@ -181,7 +183,13 @@ class Leg:
     def abandon(self) -> None:
         """Stop every task without writing anything, as a crashed process would."""
         self.closed = True
-        for task in [*self._tasks, *self._agent_turns, self._ticker]:
+        tasks: list[asyncio.Task[Any] | None] = [
+            *self._tasks,
+            *self._agent_turns,
+            *self._verdicts,
+            self._ticker,
+        ]
+        for task in tasks:
             if task is not None:
                 task.cancel()
 
@@ -533,7 +541,10 @@ class Leg:
             )
             return final
 
-        return Spoken(sentence, utterance_id, verdict=asyncio.create_task(settle())), None
+        verdict = asyncio.create_task(settle(), name=f"verdict:{utterance_id}")
+        self._verdicts.add(verdict)
+        verdict.add_done_callback(self._verdicts.discard)
+        return Spoken(sentence, utterance_id, verdict=verdict), None
 
     async def _tool(self, ctx: TurnContext, call: ToolCallChunk, token: CancelToken) -> ToolOutcome:
         conv = self.conversation

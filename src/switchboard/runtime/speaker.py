@@ -14,7 +14,6 @@ correction before the utterance closes (block-or-self-correct).
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -218,11 +217,10 @@ class Speaker:
 
     async def _finish(self, u: _Utterance) -> None:
         for verdict in u.unverified:
-            with contextlib.suppress(asyncio.CancelledError):
-                decision = await verdict
-                if decision.decision != "release":
-                    await self._on_correction(u.utterance_id, CORRECTION)
-                    await self._synthesize(u, CORRECTION)
+            decision = await _settled(verdict)
+            if decision is not None and decision.decision != "release":
+                await self._on_correction(u.utterance_id, CORRECTION)
+                await self._synthesize(u, CORRECTION)
         while True:
             if u.paused_at is not None:
                 await u.resumed.wait()
@@ -234,3 +232,18 @@ class Speaker:
         self._utterance = None
         played = u.cursor.advance(self._clock.now())
         await self._on_played(u.utterance_id, played, False, u.provider)
+
+
+async def _settled(verdict: asyncio.Task[GateDecision]) -> GateDecision | None:
+    """The verdict, or None if the verdict task itself was cancelled.
+
+    A cancellation aimed at the speaker (stop, barge-in, hang-up) arrives here too, because the
+    speaker is awaiting the verdict; it must propagate or `stop()` would never return.
+    """
+    try:
+        return await verdict
+    except asyncio.CancelledError:
+        current = asyncio.current_task()
+        if current is not None and current.cancelling():
+            raise
+        return None
