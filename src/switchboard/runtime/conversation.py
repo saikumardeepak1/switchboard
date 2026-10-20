@@ -308,23 +308,7 @@ class Conversation:
             result = {"error": "outbound calling is not configured"}
         else:
             child_id = self.new_id("leg")
-            opened = await self.emit(
-                LegOpened,
-                leg_id=child_id,
-                causation_id=causation_id,
-                role="outbound_child",
-                party=party,
-                parent_leg_id=parent.leg_id,
-                goal=goal,
-            )
-            prompt = CHILD_PROMPT.format(
-                party=party,
-                agent=self.bundle.config.name,
-                description=config.description,
-                goal=goal,
-                questions="".join(f"Ask: {q}\n" for q in questions),
-            )
-            self._spawn(self._run_child(child_id, party, prompt, parent, opened.event_id))
+            await self._dial_child(child_id, party, goal, questions, parent, causation_id)
             result = {"status": "calling", "party": party, "child_leg_id": child_id}
         await self.emit(
             ToolExecuted,
@@ -334,6 +318,77 @@ class Conversation:
             tool=call.name,
             result=result,
         )
+
+    async def _dial_child(
+        self,
+        child_id: str,
+        party: str,
+        goal: str,
+        questions: Sequence[str],
+        parent: Leg,
+        causation_id: str | None,
+    ) -> None:
+        """Record the child leg as opened and start dialing it in the background.
+
+        A redial after recovery appends a second `leg.opened` for the same leg id; the fold
+        counts it, which is what stops a third dial.
+        """
+        config = self.bundle.config.parties[party]
+        opened = await self.emit(
+            LegOpened,
+            leg_id=child_id,
+            causation_id=causation_id,
+            role="outbound_child",
+            party=party,
+            parent_leg_id=parent.leg_id,
+            goal=goal,
+        )
+        prompt = CHILD_PROMPT.format(
+            party=party,
+            agent=self.bundle.config.name,
+            description=config.description,
+            goal=goal,
+            questions="".join(f"Ask: {q}\n" for q in questions),
+        )
+        self._spawn(self._run_child(child_id, party, prompt, parent, opened.event_id))
+
+    async def recover_children(self) -> None:
+        """Settle child legs that were open when the process died (ADR-003).
+
+        A child whose result never arrived is redialed once, under the same leg id (the
+        dialer's idempotency key), with the goal and questions of the `call_party` that opened
+        it. A child already redialed once, or whose party is gone from the bundle, is closed as
+        lost; one whose result did arrive is closed as completed.
+        """
+        parents = {leg_id: leg for leg_id, leg in self.legs.items() if not leg.closed}
+        for leg in list(self.state.legs.values()):
+            if not leg.open or leg.role != "outbound_child":
+                continue
+            parent = parents.get(leg.parent_leg_id or "")
+            if leg.leg_id in self.state.child_results:
+                await self.emit(LegClosed, leg_id=leg.leg_id, reason="completed")
+            elif (
+                leg.dials >= 2
+                or parent is None
+                or self.runtime.dialer is None
+                or leg.party not in self.bundle.config.parties
+            ):
+                await self.emit(LegClosed, leg_id=leg.leg_id, reason="lost_in_recovery")
+            else:
+                await self._dial_child(
+                    leg.leg_id,
+                    leg.party,
+                    leg.goal or "",
+                    self._child_questions(leg.leg_id),
+                    parent,
+                    None,
+                )
+
+    def _child_questions(self, child_id: str) -> list[str]:
+        for call in self.state.calls.values():
+            if call.tool == "call_party" and (call.result or {}).get("child_leg_id") == child_id:
+                return [str(q) for q in call.args.get("questions", []) or []]
+        return []
 
     async def _run_child(
         self, child_id: str, party: str, prompt: str, parent: Leg, opened_id: str
@@ -534,8 +589,8 @@ class Runtime:
     async def recover(self, bundle: Bundle, conversation_id: str, *, io: LegIO) -> Conversation:
         """Rebuild a conversation from its log after a crash and reattach the caller.
 
-        Pending allowed calls are re-run through the ledger. Child legs that were open are
-        closed: their media is gone with the process.
+        Pending allowed calls are re-run through the ledger. A child call whose result never
+        arrived is redialed once (see `Conversation.recover_children`).
         """
         events = await self.store.read(conversation_id)
         if not events:
@@ -562,11 +617,9 @@ class Runtime:
         else:
             await conv.load_memory()
         conv._knowledge.update(state.knowledge)
-        for leg in list(state.legs.values()):
-            if leg.open and leg.role == "outbound_child":
-                await conv.emit(LegClosed, leg_id=leg.leg_id, reason="lost_in_recovery")
         await conv.resume_pending()
         conv.attach_leg(_inbound_leg(conv, inbound.leg_id, inbound.party, io))
+        await conv.recover_children()
         return conv
 
 

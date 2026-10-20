@@ -73,6 +73,8 @@ class LegState:
     goal: str | None
     open: bool = True
     close_reason: str | None = None
+    # How many times the leg was dialed: a recovered child call is redialed under its old id.
+    dials: int = 1
 
 
 @dataclass
@@ -230,10 +232,17 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
             state.customer_id = event.customer_id
         case LegOpened():
             leg_id = event.leg_id or ""
+            prior = state.legs.get(leg_id)
             state.legs[leg_id] = LegState(
-                leg_id, event.role, event.party, event.parent_leg_id, event.goal
+                leg_id,
+                event.role,
+                event.party,
+                event.parent_leg_id,
+                event.goal,
+                dials=prior.dials + 1 if prior is not None else 1,
             )
-            state.history.setdefault(leg_id, [])
+            # A redial is a new phone call: the model starts that leg's history afresh.
+            state.history[leg_id] = []
         case LegClosed():
             leg = state.legs.get(event.leg_id or "")
             if leg is not None:
