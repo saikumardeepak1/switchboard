@@ -17,6 +17,7 @@ CATALOG = {
     "turn.speculation_started",
     "turn.speculation_cancelled",
     "turn.committed",
+    "turn.backchannel",
     "brain.routed",
     "tool.proposed",
     "policy.verdict",

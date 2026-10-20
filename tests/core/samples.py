@@ -20,6 +20,7 @@ from switchboard.core.events import (
     ToolCompensated,
     ToolExecuted,
     ToolProposed,
+    TurnBackchannel,
     TurnCommitted,
     TurnSpeculationCancelled,
     TurnSpeculationStarted,
@@ -45,6 +46,7 @@ def every_event_type(conversation_id: str = "conv_1") -> list[AnyEvent]:
         TurnSpeculationStarted(**b, turn_id="turn_1", partial_text="where is my"),
         TurnSpeculationCancelled(**b, turn_id="turn_1"),
         TurnCommitted(**b, turn_id="turn_1", text="where is my order", endpointing_ms=212.5),
+        TurnBackchannel(**b, text="mm-hm", utterance_id="utt_0"),
         BrainRouted(**b, turn_id="turn_1", model_tier="thinker", reason="tool needed"),
         ToolProposed(**b, call_id="call_1", tool="lookup_order", args={"order_id": "48213"}),
         PolicyVerdict(

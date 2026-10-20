@@ -42,6 +42,7 @@ from switchboard.core.events import (
     ToolCompensated,
     ToolExecuted,
     ToolProposed,
+    TurnBackchannel,
     TurnCommitted,
     TurnSpeculationCancelled,
     TurnSpeculationStarted,
@@ -214,6 +215,8 @@ def _describe(e: AnyEvent) -> str:
             return f"Speculating on {e.partial_text!r}"
         case TurnSpeculationCancelled():
             return f"Speculation {e.turn_id} cancelled, caller kept talking"
+        case TurnBackchannel():
+            return f"Backchannel while the agent spoke: {e.text!r}"
         case TurnCommitted():
             return f"Turn committed after {e.endpointing_ms:.0f} ms endpointing: {e.text!r}"
         case BrainRouted():

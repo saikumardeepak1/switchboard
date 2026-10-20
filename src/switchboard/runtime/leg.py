@@ -10,6 +10,10 @@ tools proposed while the turn is still speculative get a `speculation:uncommitte
 and wait; once the turn commits they are checked by policy and run once. Agent-initiated turns
 (a child call result, an outbound call connecting) run the same loop without the engine.
 
+Backchannels. A burst of caller speech that starts while the agent is speaking and turns out to
+be only "mm-hm", "okay" and the like is recorded as `turn.backchannel` and nothing else: no
+speculation, no committed turn, and the barge-in policy already let playback continue.
+
 Brain loop, per turn: route, then up to `max_llm_calls` model calls. Text is split into
 sentences and each passes the grounding gate before it can reach TTS; one blocked sentence buys
 one regeneration with a rewrite hint. Tool calls are proposed, checked, and executed; a denial
@@ -45,6 +49,7 @@ from switchboard.core import (
     SpeechSentenceGated,
     ToolExecuted,
     ToolProposed,
+    TurnBackchannel,
     TurnCommitted,
     TurnSpeculationCancelled,
     TurnSpeculationStarted,
@@ -66,6 +71,7 @@ from switchboard.turn import (
     SpeculativeTurnEngine,
     TurnSignal,
     VadFrame,
+    is_backchannel,
     normalize_text,
 )
 
@@ -139,6 +145,8 @@ class Leg:
         self._in_turn = False
         self._in_speech = False
         self._last_speech_at: float | None = None
+        # The utterance playing when the current caller burst began, if any.
+        self._over_utterance: str | None = None
         self._tasks: set[asyncio.Task[None]] = set()
         self._agent_turns: set[asyncio.Task[None]] = set()
         self._ticker: asyncio.Task[None] | None = None
@@ -218,6 +226,7 @@ class Leg:
             self._last_speech_at = signal.at
             if not self._in_turn:
                 self._in_turn = True
+                self._over_utterance = self.speaker.utterance_id if self.speaker.speaking else None
                 if self._ticker is None or self._ticker.done():
                     self._ticker = asyncio.create_task(self._tick_loop())
         if isinstance(signal, FinalTranscript) and not self._in_turn:
@@ -245,6 +254,16 @@ class Leg:
                 self._in_turn = False
             if signal.kind == "resumed" or not signal.text.strip():
                 await self._cancel_speculation()
+                return
+            if self._over_utterance is not None and is_backchannel(signal.text):
+                if signal.kind == "end":
+                    await self.conversation.emit(
+                        TurnBackchannel,
+                        leg_id=self.leg_id,
+                        text=signal.text,
+                        utterance_id=self._over_utterance,
+                    )
+                    self._over_utterance = None
                 return
             if signal.kind == "eager_end":
                 await self._on_eager(signal)

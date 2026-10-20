@@ -110,6 +110,7 @@ Event catalog (type string, payload fields):
 | `turn.speculation_started` | turn_id, partial_text |
 | `turn.speculation_cancelled` | turn_id |
 | `turn.committed` | turn_id, text, endpointing_ms |
+| `turn.backchannel` | text, utterance_id (said over agent speech; not a turn) |
 | `brain.routed` | turn_id, model_tier (`talker`/`thinker`), reason |
 | `tool.proposed` | call_id, tool, args |
 | `policy.verdict` | call_id, allowed, rule_ids, repair_hint |

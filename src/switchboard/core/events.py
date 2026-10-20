@@ -56,6 +56,15 @@ class TurnSpeculationCancelled(Event):
     turn_id: str
 
 
+class TurnBackchannel(Event):
+    """ "Mm-hm", "okay" and the like said while the agent was speaking. Not a turn: playback
+    continues and the model never sees it. `utterance_id` is what was playing."""
+
+    type: Literal["turn.backchannel"] = "turn.backchannel"
+    text: str
+    utterance_id: str | None = None
+
+
 class TurnCommitted(Event):
     type: Literal["turn.committed"] = "turn.committed"
     turn_id: str
@@ -164,6 +173,7 @@ AnyEvent = Annotated[
     | TurnSpeculationStarted
     | TurnSpeculationCancelled
     | TurnCommitted
+    | TurnBackchannel
     | BrainRouted
     | ToolProposed
     | PolicyVerdict

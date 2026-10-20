@@ -92,6 +92,15 @@ class Speaker:
     def active(self) -> bool:
         return self._utterance is not None
 
+    @property
+    def speaking(self) -> bool:
+        """Audio is playing or queued to play."""
+        return not self._idle.is_set()
+
+    @property
+    def utterance_id(self) -> str | None:
+        return self._utterance.utterance_id if self._utterance is not None else None
+
     def start(self) -> None:
         self._task = asyncio.create_task(self._run(), name="speaker")
 
