@@ -16,10 +16,11 @@ policy facts and the model cannot write one. A child result's key also needs `pr
 child leg and the event id of a turn the other party committed on that leg. A key without it, or
 citing a turn that is not that party's, is dropped, so a child cannot confirm what nobody said.
 
-Grounding inputs. The gate checks spoken claims against tool results, child results, retrieved
-knowledge text and memory read at setup. All four are in the log (`knowledge.retrieved` and
-`memory.loaded` carry their text when content capture is on), so `grounding_evidence()` on a
-replayed state is exactly what the live gate saw.
+Grounding inputs. The gate checks spoken claims against tool results, child results (minus the
+free-text `notes` the child's model wrote), retrieved knowledge text and memory read at setup.
+All four are in the log (`knowledge.retrieved` and `memory.loaded` carry their text when
+content capture is on), so `grounding_evidence()` on a replayed state is exactly what the
+live gate saw.
 
 Incremental by construction. The grounding evidence, the policy event index and the set of
 tools that have succeeded are updated here, once per event, and never rebuilt from the whole
@@ -61,6 +62,9 @@ from switchboard.policy.procedure import tool_succeeded
 
 # Verdicts with these rule ids are runtime refusals, not policy denials the model must repair.
 SPECULATION_RULE = "speculation:uncommitted_turn"
+
+# Child result fields the child's model wrote. Shown to the parent model, never evidence.
+_MODEL_AUTHORED = frozenset({"notes"})
 
 TurnStatus = Literal["speculating", "committed", "cancelled", "agent"]
 Role = Literal["system", "user", "assistant", "tool"]
@@ -415,7 +419,8 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
                 state.completed_steps.append(event.step)
         case ChildResult():
             state.child_results[event.child_leg_id] = dict(event.result)
-            state.grounding.add(dict(event.result))
+            # Only runtime-built fields ground speech; the child model wrote `notes`.
+            state.grounding.add({k: v for k, v in event.result.items() if k not in _MODEL_AUTHORED})
             _merge_child_evidence(state, event.child_leg_id, event.result)
             child = state.legs.get(event.child_leg_id)
             party = child.party if child is not None else "party"

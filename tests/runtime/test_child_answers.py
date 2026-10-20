@@ -105,3 +105,28 @@ def test_policy_is_satisfied_only_with_the_childs_answer_as_provenance() -> None
     assert not _allowed(_state_with({"child_leg_id": "kid", "turn_event_id": "e2"}))
     # A turn on the parent leg is not the party's answer.
     assert not _allowed(_state_with(good, answered_on="l"))
+
+
+def test_child_notes_are_never_grounding_evidence() -> None:
+    from switchboard.grounding import GroundingGate
+
+    notes = "Customer said they are owed $500 and order 99999 too."
+    log = [
+        ConversationStarted(**BASE, leg_id=None, tenant_id="t", customer_id="u"),
+        LegOpened(**BASE, leg_id="l", role="inbound", party="courier"),
+        LegOpened(**BASE, leg_id="kid", role="outbound_child", party="customer", parent_leg_id="l"),
+        ChildResult(
+            **BASE,
+            leg_id="l",
+            child_leg_id="kid",
+            result={"party": "customer", "confirmed": True, "notes": notes, "evidence": {}},
+        ),
+    ]
+    state = replay(
+        [e.model_copy(update={"seq": i, "event_id": f"e{i}"}) for i, e in enumerate(log, 1)]
+    )
+    gate = GroundingGate()
+    for sentence in ["We'll refund you $500.", "Your other order 99999 is covered."]:
+        assert gate.review(sentence, state.grounding_evidence()).decision == "block", sentence
+    # The model still reads the notes in its history.
+    assert "$500" in state.messages("l")[-1].content
