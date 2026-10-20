@@ -5,6 +5,12 @@ key in the ledger, runs the tool, and records the result, so a retry or replay o
 gets the recorded result back with `replayed=True` instead of a second side effect. A write tool
 never runs on a speculative turn (ADR-006): speculation can be cancelled, and a refund cannot.
 
+The ledger only dedupes inside this runtime. When a write times out, the tool may already have
+reached the downstream service, and the retry runs the body again. A write tool that declares a
+keyword-only `idempotency_key` parameter receives the derived key (or, as a compensation, the
+compensation key) on every attempt, so it can forward it and let the downstream service apply
+the effect once.
+
 Every failure comes back as a `ToolResult` with `ok=False` rather than an exception, because the
 caller is a conversation that has to say something either way. The one exception is
 cancellation of the caller itself, which marks the claim failed and propagates.
@@ -20,7 +26,7 @@ from typing import Any
 from switchboard.core.clock import Clock
 from switchboard.effects.keys import compensation_key, idempotency_key
 from switchboard.effects.ledger import IdempotencyLedger
-from switchboard.effects.spec import RegisteredTool, ToolRegistry, validate_args
+from switchboard.effects.spec import KEY_PARAM, RegisteredTool, ToolRegistry, validate_args
 
 DEFAULT_POLL_INTERVAL_S = 0.05
 
@@ -101,6 +107,8 @@ class EffectRunner:
         if tool is None:
             return self._error(attempt, f"unknown tool {call.tool!r}")
         errors = validate_args(tool.spec, call.args)
+        if tool.accepts_key and KEY_PARAM in call.args:
+            errors.append(f"args.{KEY_PARAM}: reserved for the runner")
         if errors:
             return self._error(attempt, f"invalid arguments for {call.tool}: " + "; ".join(errors))
         if tool.spec.effect == "read":
@@ -192,8 +200,11 @@ class EffectRunner:
                 )
             await self._clock.sleep(min(self._poll_s, deadline - now))
 
+        args = dict(attempt.call.args)
+        if tool.accepts_key:
+            args[KEY_PARAM] = key
         try:
-            result = await self._execute(tool, attempt.call.args)
+            result = await self._execute(tool, args)
         except (_TimedOut, Exception) as exc:
             message = str(exc) if isinstance(exc, _TimedOut) else _describe(exc)
             await self._ledger.fail(key, token, message)

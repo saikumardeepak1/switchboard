@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from switchboard.core.clock import VirtualClock
-from switchboard.effects.keys import idempotency_key
+from switchboard.effects.keys import compensation_key, idempotency_key
 from switchboard.effects.ledger import IdempotencyLedger, InMemoryLedger, SqliteLedger
 from switchboard.effects.runner import EffectContext, EffectRunner, ToolCall, ToolResult
 from switchboard.effects.spec import ToolRegistry
@@ -334,3 +334,112 @@ def test_runner_validates_registry(clock: VirtualClock) -> None:
     )(t)
     with pytest.raises(Exception, match="not registered"):
         EffectRunner(registry, InMemoryLedger(clock, lease_s=60), clock)
+
+
+class FakePaymentsApi:
+    """A downstream service that dedupes on an Idempotency-Key header, as Stripe does."""
+
+    def __init__(self) -> None:
+        self.applied: dict[str, dict[str, Any]] = {}
+        self.requests: list[str] = []
+
+    def refund(self, order_id: str, idempotency_key: str) -> dict[str, Any]:
+        self.requests.append(idempotency_key)
+        if idempotency_key not in self.applied:
+            self.applied[idempotency_key] = {"refund_id": f"ext_{len(self.applied) + 1}"}
+        return self.applied[idempotency_key]
+
+
+def keyed_registry(clock: VirtualClock, api: FakePaymentsApi, body_runs: list[str]) -> ToolRegistry:
+    registry = ToolRegistry()
+    params = {
+        "type": "object",
+        "properties": {"order_id": {"type": "string"}},
+        "required": ["order_id"],
+    }
+
+    @registry.tool(
+        name="refund",
+        description="d",
+        effect="write",
+        params=params,
+        compensate="unrefund",
+        timeout_s=5.0,
+    )
+    async def refund(order_id: str, *, idempotency_key: str) -> dict[str, Any]:
+        body_runs.append(idempotency_key)
+        reply = api.refund(order_id, idempotency_key)
+        if len(body_runs) == 1:
+            await clock.sleep(30)  # the reply is slow and the runner gives up first
+        return reply
+
+    @registry.tool(
+        name="unrefund",
+        description="d",
+        effect="write",
+        params={"type": "object", "properties": {"refund_id": {"type": "string"}}},
+    )
+    async def unrefund(refund_id: str, *, idempotency_key: str) -> dict[str, Any]:
+        body_runs.append(idempotency_key)
+        return {"voided": refund_id}
+
+    return registry
+
+
+async def test_timeout_then_retry_applies_downstream_effect_exactly_once(
+    clock: VirtualClock,
+) -> None:
+    api = FakePaymentsApi()
+    body_runs: list[str] = []
+    runner = EffectRunner(
+        keyed_registry(clock, api, body_runs), InMemoryLedger(clock, lease_s=60), clock
+    )
+    call = ToolCall("c1", "refund", {"order_id": "48213"})
+    first = await drive(clock, runner.run(call, CTX))
+    assert not first.ok and first.error == "refund timed out after 5s"
+    second = await runner.run(call, CTX)
+    assert second.ok and not second.replayed
+    assert len(body_runs) == 2
+    assert body_runs[0] == body_runs[1] == first.idempotency_key == second.idempotency_key
+    assert len(api.applied) == 1
+    assert second.result == {"refund_id": "ext_1"}
+
+
+async def test_compensation_receives_its_own_compensation_key(clock: VirtualClock) -> None:
+    api = FakePaymentsApi()
+    body_runs: list[str] = ["skip slow path"]
+    runner = EffectRunner(
+        keyed_registry(clock, api, body_runs), InMemoryLedger(clock, lease_s=60), clock
+    )
+    original = await runner.run(ToolCall("c1", "refund", {"order_id": "1"}), CTX)
+    undo = await runner.compensate(original, CTX)
+    assert original.idempotency_key is not None
+    assert undo.ok
+    assert body_runs[-1] == undo.idempotency_key
+    assert undo.idempotency_key == compensation_key(original.idempotency_key, "unrefund")
+
+
+async def test_tools_without_the_parameter_get_no_key(runner: EffectRunner, bench: Bench) -> None:
+    result = await runner.run(refund_call(), CTX)
+    assert result.ok  # issue_refund takes no idempotency_key and must not be passed one
+
+
+async def test_caller_cannot_supply_the_key_itself(clock: VirtualClock) -> None:
+    registry = ToolRegistry()
+    runs: list[str] = []
+
+    @registry.tool(
+        name="open_ended",
+        description="d",
+        effect="write",
+        params={"type": "object", "properties": {}, "additionalProperties": True},
+    )
+    async def open_ended(*, idempotency_key: str, **_: Any) -> dict[str, Any]:
+        runs.append(idempotency_key)
+        return {}
+
+    runner = EffectRunner(registry, InMemoryLedger(clock, lease_s=60), clock)
+    result = await runner.run(ToolCall("c", "open_ended", {"idempotency_key": "mine"}), CTX)
+    assert not result.ok
+    assert result.error is not None and "args.idempotency_key: reserved" in result.error
+    assert runs == []

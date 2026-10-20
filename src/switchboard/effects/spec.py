@@ -5,6 +5,12 @@ integer, boolean, object, array), `properties`, `required`, `enum`, `minimum`, `
 `items`, `additionalProperties` and `description`. Any other keyword is rejected when the spec
 is built, so a schema never looks stricter than the checks that actually run.
 
+Write tools that forward the key downstream (for example as an `Idempotency-Key` header)
+declare a keyword-only parameter named `idempotency_key`. The registry detects it once, at
+registration, and the runner then passes the derived key, or the compensation key when the tool
+runs as a compensation. That lets a downstream service dedupe a retry that follows a timeout,
+where the tool body runs twice but the effect must land once. Read tools never get a key.
+
 One intentional difference from JSON Schema: unknown properties are rejected unless
 `additionalProperties` is true. An LLM inventing an argument is a bug worth surfacing before a
 write tool runs, not something to pass through silently.
@@ -37,6 +43,7 @@ _KEYWORDS = frozenset(
 )
 
 DEFAULT_TIMEOUT_S = 10.0
+KEY_PARAM = "idempotency_key"
 
 
 class RegistryError(Exception):
@@ -179,6 +186,13 @@ def validate_args(spec: ToolSpec, args: Mapping[str, Any]) -> list[str]:
 class RegisteredTool:
     spec: ToolSpec
     fn: ToolFn
+    # True when `fn` declares a keyword-only `idempotency_key` parameter.
+    accepts_key: bool = False
+
+
+def _accepts_key(fn: ToolFn) -> bool:
+    param = inspect.signature(fn).parameters.get(KEY_PARAM)
+    return param is not None and param.kind is inspect.Parameter.KEYWORD_ONLY
 
 
 class ToolRegistry:
@@ -190,7 +204,12 @@ class ToolRegistry:
             raise RegistryError(f"tool {spec.name!r} is already registered")
         if not inspect.iscoroutinefunction(fn):
             raise RegistryError(f"tool {spec.name!r} must be an async function")
-        self._tools[spec.name] = RegisteredTool(spec, fn)
+        accepts_key = _accepts_key(fn)
+        if accepts_key and spec.effect == "read":
+            raise RegistryError(f"{spec.name!r} is a read tool and never receives {KEY_PARAM!r}")
+        if accepts_key and KEY_PARAM in spec.params.get("properties", {}):
+            raise RegistryError(f"{spec.name!r}: {KEY_PARAM!r} is reserved and cannot be a param")
+        self._tools[spec.name] = RegisteredTool(spec, fn, accepts_key)
 
     def tool(
         self,

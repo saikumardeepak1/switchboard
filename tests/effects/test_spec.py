@@ -179,3 +179,42 @@ def test_validate_passes_for_consistent_registry() -> None:
     )
     registry.tool(name="u", description="d", effect="write", params=REFUND_PARAMS)(_noop)
     registry.validate()
+
+
+def test_registry_detects_keyword_only_idempotency_key() -> None:
+    registry = ToolRegistry()
+
+    async def keyed(*, idempotency_key: str) -> dict[str, Any]:
+        return {}
+
+    async def positional(idempotency_key: str) -> dict[str, Any]:
+        return {}
+
+    write = {"name": "w", "description": "d", "effect": "write", "params": {"type": "object"}}
+    registry.tool(**write)(keyed)  # type: ignore[arg-type]
+    registry.tool(**{**write, "name": "p"})(positional)  # type: ignore[arg-type]
+    registry.tool(**{**write, "name": "n"})(_noop)  # type: ignore[arg-type]
+    assert registry.get("w").accepts_key  # type: ignore[union-attr]
+    assert not registry.get("p").accepts_key  # type: ignore[union-attr]
+    assert not registry.get("n").accepts_key  # type: ignore[union-attr]
+
+
+def test_read_tool_may_not_ask_for_an_idempotency_key() -> None:
+    registry = ToolRegistry()
+
+    async def keyed(*, idempotency_key: str) -> dict[str, Any]:
+        return {}
+
+    with pytest.raises(RegistryError, match="read tool"):
+        registry.tool(name="r", description="d", effect="read", params={"type": "object"})(keyed)
+
+
+def test_keyed_tool_may_not_declare_idempotency_key_as_a_param() -> None:
+    registry = ToolRegistry()
+
+    async def keyed(*, idempotency_key: str) -> dict[str, Any]:
+        return {}
+
+    params = {"type": "object", "properties": {"idempotency_key": {"type": "string"}}}
+    with pytest.raises(RegistryError, match="reserved"):
+        registry.tool(name="w", description="d", effect="write", params=params)(keyed)
