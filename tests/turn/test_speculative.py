@@ -263,3 +263,26 @@ async def test_a_signal_that_launches_needs_a_payload() -> None:
         await engine.handle(signal("eager_end", clock.now(), "hello"))
     await engine.handle(signal("resumed", clock.now(), "hello"))
     assert brain.calls == []
+
+
+async def test_cancel_committed_spares_the_speculation() -> None:
+    clock = VirtualClock()
+    brain = FakeBrain(clock)
+    engine: SpeculativeTurnEngine[str, str] = SpeculativeTurnEngine(clock, brain.generate)
+    consumer = Consumer(engine, clock)
+    await engine.handle(signal("end", clock.now(), "first turn"), "a")
+    await clock.advance(0.1)
+    await engine.handle(signal("eager_end", clock.now(), "second turn"), "b")
+    await asyncio.sleep(0)
+    await engine.cancel_committed()
+    committed, speculation = brain.calls[0][1], brain.calls[1][1]
+    assert committed.cancelled and not speculation.cancelled
+    assert engine.speculating
+    await engine.handle(signal("end", clock.now(), "second turn"), "b")
+    await clock.run_until_idle()
+    await consumer.task
+    assert consumer.chunks == []  # the cancelled turn released nothing
+    second = Consumer(engine, clock)
+    await clock.run_until_idle()
+    await second.task
+    assert [c for _, c in second.chunks] == [f"second turn|{i}" for i in range(3)]

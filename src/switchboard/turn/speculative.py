@@ -171,6 +171,16 @@ class SpeculativeTurnEngine[T, P]:
             gen.wakeup.clear()
             await gen.wakeup.wait()
 
+    async def cancel_committed(self) -> None:
+        """Cancel committed generations (the agent's current output), keeping the speculation.
+
+        Barge-in uses this: the caller's new speech may already have started a speculation,
+        and that one belongs to the turn the caller is taking now.
+        """
+        for gen in list(self._live):
+            if gen is not self._speculation:
+                await self._cancel(gen)
+
     async def aclose(self) -> None:
         """Cancel every running generation."""
         for gen in list(self._live):

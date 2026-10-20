@@ -363,16 +363,14 @@ class Leg:
         )
 
     async def _barge_in(self) -> None:
-        """The caller took the floor: drop the rest of whatever the agent was saying."""
+        """The caller took the floor: drop the rest of whatever the agent was saying.
+
+        A speculation is never the agent's output; any live one started from the caller's
+        speech, usually the barge-in itself, so it is left to endpointing to promote or cancel.
+        """
         for task in list(self._agent_turns):
             task.cancel()
-        spec = self._spec
-        await self._engine.aclose()
-        if spec is not None:
-            self._spec = None
-            await self.conversation.emit(
-                TurnSpeculationCancelled, leg_id=self.leg_id, turn_id=spec.turn_id
-            )
+        await self._engine.cancel_committed()
 
     # the brain loop
 
