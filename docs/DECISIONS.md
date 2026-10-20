@@ -207,6 +207,11 @@ fires on a deadline, not only on errors, ending in a human-handoff tier.
 protect capacity. Slow providers cause dead air, the failure callers notice first (Vapi, Retell,
 Sierra all use deadline-triggered fallback).
 
+**Implementation note (2026-10).** The token budget is `tenant_limits.tokens_per_minute` in
+`agent.yaml` (or a per-tenant override on `AdmissionController`), counted from model usage over a
+sliding 60 second window on the clock. A tenant over budget keeps its calls; its turns are routed
+to the talker with `brain.routed` reason `budget` until usage slides out of the window.
+
 ## ADR-014: Everything runs on an injectable clock; evaluation is deterministic simulation
 
 **Decision.** No component reads wall time directly. A virtual clock drives simulated providers

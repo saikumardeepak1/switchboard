@@ -30,6 +30,7 @@ from switchboard.brain import (
     RouteRule,
     Tier,
     ToolCallChunk,
+    Usage,
     canonical_json,
 )
 from switchboard.bundle import Bundle
@@ -207,6 +208,18 @@ class Conversation:
         if tier == "talker" and self.runtime.talker is not None:
             return self.runtime.talker
         return self.runtime.llm
+
+    def spend_tokens(self, usage: Usage) -> None:
+        tokens = usage.input_tokens + usage.output_tokens
+        self.runtime.admission.record_tokens(self.state.tenant_id, tokens, now=self.clock.now())
+
+    def over_token_budget(self) -> bool:
+        """The tenant spent its tokens-per-minute budget: route to the talker (ADR-013)."""
+        return self.runtime.admission.over_budget(
+            self.state.tenant_id,
+            now=self.clock.now(),
+            default_budget=self.bundle.config.tenant_limits.tokens_per_minute,
+        )
 
     def requested_tools(self, text: str) -> list[str]:
         """Write tools a committed user turn newly asks for (ADR-009)."""

@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from switchboard.brain import (
     BrainRequest,
+    Done,
     Message,
     RouteDecision,
     RouteState,
@@ -407,6 +408,8 @@ class Leg:
                 decision = conv.router.route(ctx.text, RouteState())
             else:
                 decision = RouteDecision("thinker", ctx.reason)
+            if conv.over_token_budget():
+                decision = RouteDecision("talker", "budget")
             await conv.emit(
                 BrainRouted,
                 leg_id=self.leg_id,
@@ -497,6 +500,8 @@ class Leg:
                 async for chunk in stream:
                     if isinstance(chunk, ToolCallChunk):
                         calls.append(chunk)
+                    elif isinstance(chunk, Done):
+                        self.conversation.spend_tokens(chunk.usage)
                     elif isinstance(chunk, TextDelta):
                         for sentence in splitter.feed(chunk.text):
                             spoken, blocked = await self._gate(ctx, utterance_id, sentence)
