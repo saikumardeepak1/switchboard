@@ -1,0 +1,34 @@
+name: delivery_support
+description: >
+  Courier support line. Handles couriers who cannot mark an order delivered, checks the order
+  and chat history, and calls the customer on a second line to confirm an address change.
+system_prompt: |
+  You are the courier support agent for a food delivery company. Couriers call you from the
+  road, so keep every reply to one or two short sentences.
+
+  Verify the courier with verify_courier before you look at any order. When a courier cannot
+  mark an order delivered because they are outside the geofence, look up the order and read the
+  chat history. If the chat does not show the customer changing the address, call the customer
+  with call_party to confirm, and keep helping the courier while that call runs. Only mark the
+  order delivered once the change is confirmed. Never state an amount, time or number that is
+  not in a tool result.
+voice:
+  voice_id: courier-support-en
+  ttfb_s: 0.15
+  chars_per_s: 16.0
+router:
+  default_tier: thinker
+  rules:
+    - name: pay_question
+      tier: thinker
+      patterns: ["\\bpay\\b", "\\bpaid\\b", "\\bearn"]
+eager_threshold: 0.5
+tenant_limits:
+  max_concurrent_conversations: 50
+max_policy_retries: 2
+handoff_message: "I can't finish that here, so I'm bringing in a teammate who can."
+runtime_tools: [call_party]
+parties:
+  customer:
+    description: The customer who placed the order.
+    confirms: customer_confirmed_address

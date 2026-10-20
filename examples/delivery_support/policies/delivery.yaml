@@ -1,0 +1,25 @@
+procedure:
+  steps: [verify_identity, investigate, resolve]
+  require_before:
+    lookup_order: [verify_identity]
+    mark_delivered: [verify_identity]
+    issue_refund: [verify_identity]
+    get_courier_pay: [verify_identity]
+    call_party: [verify_identity, investigate]
+  completes:
+    verify_courier: verify_identity
+    lookup_order: investigate
+    mark_delivered: resolve
+rules:
+  - id: delivered_needs_confirmation
+    when: {tool: mark_delivered}
+    require: "evidence.customer_confirmed_address == true or evidence.chat_shows_address_change == true"
+    hint: "The address change is not confirmed. Check the chat, or call the customer with call_party to confirm it first."
+  - id: refund_limit
+    when: {tool: issue_refund}
+    require: "args.amount <= 25"
+    hint: "Refunds above $25 need a human. Offer a handoff."
+  - id: one_refund_per_conversation
+    when: {tool: issue_refund}
+    require: "count(tool.executed, tool=issue_refund) < 1"
+    hint: "A refund was already issued on this call. Offer a handoff instead."

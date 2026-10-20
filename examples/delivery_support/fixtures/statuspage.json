@@ -1,0 +1,35 @@
+{
+  "page": {
+    "id": "dlv0status01",
+    "name": "Delivery Platform",
+    "url": "https://status.example.com",
+    "time_zone": "America/Los_Angeles",
+    "updated_at": "2026-10-20T11:05:00.000-07:00"
+  },
+  "incidents": [
+    {
+      "id": "geo4fence9x1",
+      "name": "Geofence service degraded",
+      "status": "identified",
+      "created_at": "2026-10-20T10:40:00.000-07:00",
+      "updated_at": "2026-10-20T11:05:00.000-07:00",
+      "resolved_at": null,
+      "impact": "minor",
+      "components": [{"id": "cmp_geofence", "name": "geofence"}],
+      "incident_updates": [
+        {
+          "id": "upd_geo_2",
+          "status": "identified",
+          "body": "Geofence checks are rejecting some valid drop-offs. Support can mark affected orders delivered manually.",
+          "created_at": "2026-10-20T11:05:00.000-07:00"
+        },
+        {
+          "id": "upd_geo_1",
+          "status": "investigating",
+          "body": "We are looking into failed delivery confirmations.",
+          "created_at": "2026-10-20T10:40:00.000-07:00"
+        }
+      ]
+    }
+  ]
+}
