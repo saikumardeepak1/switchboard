@@ -38,6 +38,15 @@ def test_grounding_gate_reports_catch_and_false_block_rates() -> None:
     assert r["with_scorer"]["verifier_calls"] <= r["sentences"]
 
 
+def test_grounding_gate_tier1_only_fails_escalations_closed_like_the_runtime() -> None:
+    r = grounding_gate.run(n=4000, workers=1)["results"]
+    # With no verifier every escalation ends as a block, so nothing is left undecided.
+    assert r["tier1_only"]["escalated"] > 0
+    assert r["tier1_caught"] + r["tier1_only_released_corrupt"] == r["corrupted"]
+    eta = r["by_category"]["eta_minutes"]
+    assert eta["corrupted"] > 0
+
+
 def test_speculation_latency_sweeps_the_eager_threshold() -> None:
     data = speculation_latency.run(n=2, workers=1)
     rows = data["results"]["configs"]

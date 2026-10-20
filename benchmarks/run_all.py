@@ -165,6 +165,8 @@ def summarize(data: dict[str, dict[str, Any]], timings: dict[str, float]) -> str
         "",
         f"Tier 1 latency: p50 {g['tier1_latency_us']['p50']:.1f} us, "
         f"p99 {g['tier1_latency_us']['p99']:.1f} us. "
+        f"Tier 1 only escalations, failed closed with no verifier and counted as blocks: "
+        f"{pct(g['tier1_only']['escalated_share'])} of sentences. "
         f"Share of sentences needing tier 3 with the lexical scorer: "
         f"{pct(g['with_scorer']['tier3_share'])}.",
         "",

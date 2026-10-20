@@ -16,7 +16,8 @@ in a call.
 Configurations:
 
 - `tier1_only`: the runtime default gate. Claims are checked against evidence; a sentence with no
-  claims is released (it states nothing checkable).
+  claims is released (it states nothing checkable). There is no verifier, so an escalation (a
+  hedged or ambiguous claim that misses) fails closed and counts as a block, as in a call.
 - `with_scorer`: tier 2 is the reference `LexicalScorer`; sentences it cannot decide escalate to
   tier 3, a simulated verifier that catches a corrupted sentence with recall `VERIFIER_RECALL`.
 - baseline: every sentence goes to the verifier (the reference design's per-sentence reasoning
@@ -211,10 +212,14 @@ def chunk(job: tuple[int, int]) -> dict[str, Any]:
         c[f"cat:{category}"] += 1
         has_claims = bool(d.claims)
         c["with_claims" if has_claims else "claimless"] += 1
+        # The runtime default has no verifier, so `resolve` turns every escalation into a block.
+        blocked = d.decision in ("block", "escalate")
+        if d.decision == "escalate":
+            c["tier1_escalated"] += 1
         if corrupted:
             c["corrupted"] += 1
             c[f"corrupted:{category}"] += 1
-            if d.decision == "block" and d.tier == 1:
+            if blocked:
                 c["tier1_caught"] += 1
             if d.decision == "release":
                 c["tier1_only_released_corrupt"] += 1
@@ -222,7 +227,7 @@ def chunk(job: tuple[int, int]) -> dict[str, Any]:
             c["clean"] += 1
             if has_claims:
                 c["clean_with_claims"] += 1
-            if d.decision == "block":
+            if blocked:
                 c["false_block"] += 1
                 c[f"false_block:{category}"] += 1
         # with a scorer, plus a verifier for escalations
@@ -279,7 +284,12 @@ def run(n: int | None = None, workers: int | None = None) -> dict[str, Any]:
         "false_block_rate_clean_with_claims": ratio(c["false_block"], c["clean_with_claims"]),
         "by_category": by_category,
         "tier1_latency_us": {"p50": pct(latency, 50), "p99": pct(latency, 99)},
-        "tier1_only": {"verifier_calls": 0, "tier3_share": 0.0},
+        "tier1_only": {
+            "verifier_calls": 0,
+            "tier3_share": 0.0,
+            "escalated": c["tier1_escalated"],
+            "escalated_share": ratio(c["tier1_escalated"], sentences),
+        },
         "with_scorer": {
             "verifier_calls": calls,
             "tier3_share": ratio(c["escalated"], sentences),
