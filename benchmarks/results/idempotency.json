@@ -1,0 +1,168 @@
+{
+  "benchmark": "idempotency",
+  "note": "Simulated on a virtual clock. Latencies come from configured provider latency distributions, so they measure the architecture's scheduling, not real providers.",
+  "params": {
+    "configs": {
+      "naive_retry": {
+        "downstream_honours_key": false,
+        "ledger_survives": false
+      },
+      "switchboard": {
+        "downstream_honours_key": true,
+        "ledger_survives": true
+      },
+      "switchboard_downstream_ignores_key": {
+        "downstream_honours_key": false,
+        "ledger_survives": true
+      },
+      "switchboard_ledger_lost": {
+        "downstream_honours_key": true,
+        "ledger_survives": false
+      }
+    },
+    "crash_points": [
+      "before_downstream",
+      "after_downstream",
+      "before_log",
+      "after_log"
+    ],
+    "n": 500,
+    "targets": [
+      "mark_delivered",
+      "issue_refund"
+    ]
+  },
+  "platform": "macOS-15.7.3",
+  "python": "3.12.12",
+  "results": {
+    "naive_retry": {
+      "applied_writes": 993,
+      "by_crash_point": {
+        "after_downstream": {
+          "double_applied": 118,
+          "missed": 0,
+          "runs": 118
+        },
+        "after_log": {
+          "double_applied": 0,
+          "missed": 0,
+          "runs": 124
+        },
+        "before_downstream": {
+          "double_applied": 0,
+          "missed": 0,
+          "runs": 128
+        },
+        "before_log": {
+          "double_applied": 130,
+          "missed": 0,
+          "runs": 130
+        }
+      },
+      "crashed_runs": 500,
+      "double_applied": 248,
+      "double_apply_rate_per_crash": 0.496,
+      "intended_writes": 745,
+      "missed": 0,
+      "runs": 500,
+      "runs_with_double_apply": 248
+    },
+    "switchboard": {
+      "applied_writes": 745,
+      "by_crash_point": {
+        "after_downstream": {
+          "double_applied": 0,
+          "missed": 0,
+          "runs": 118
+        },
+        "after_log": {
+          "double_applied": 0,
+          "missed": 0,
+          "runs": 124
+        },
+        "before_downstream": {
+          "double_applied": 0,
+          "missed": 0,
+          "runs": 128
+        },
+        "before_log": {
+          "double_applied": 0,
+          "missed": 0,
+          "runs": 130
+        }
+      },
+      "crashed_runs": 500,
+      "double_applied": 0,
+      "double_apply_rate_per_crash": 0.0,
+      "intended_writes": 745,
+      "missed": 0,
+      "runs": 500,
+      "runs_with_double_apply": 0
+    },
+    "switchboard_downstream_ignores_key": {
+      "applied_writes": 863,
+      "by_crash_point": {
+        "after_downstream": {
+          "double_applied": 118,
+          "missed": 0,
+          "runs": 118
+        },
+        "after_log": {
+          "double_applied": 0,
+          "missed": 0,
+          "runs": 124
+        },
+        "before_downstream": {
+          "double_applied": 0,
+          "missed": 0,
+          "runs": 128
+        },
+        "before_log": {
+          "double_applied": 0,
+          "missed": 0,
+          "runs": 130
+        }
+      },
+      "crashed_runs": 500,
+      "double_applied": 118,
+      "double_apply_rate_per_crash": 0.236,
+      "intended_writes": 745,
+      "missed": 0,
+      "runs": 500,
+      "runs_with_double_apply": 118
+    },
+    "switchboard_ledger_lost": {
+      "applied_writes": 745,
+      "by_crash_point": {
+        "after_downstream": {
+          "double_applied": 0,
+          "missed": 0,
+          "runs": 118
+        },
+        "after_log": {
+          "double_applied": 0,
+          "missed": 0,
+          "runs": 124
+        },
+        "before_downstream": {
+          "double_applied": 0,
+          "missed": 0,
+          "runs": 128
+        },
+        "before_log": {
+          "double_applied": 0,
+          "missed": 0,
+          "runs": 130
+        }
+      },
+      "crashed_runs": 500,
+      "double_applied": 0,
+      "double_apply_rate_per_crash": 0.0,
+      "intended_writes": 745,
+      "missed": 0,
+      "runs": 500,
+      "runs_with_double_apply": 0
+    }
+  },
+  "simulated": true
+}
