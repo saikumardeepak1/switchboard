@@ -25,11 +25,16 @@ runs end to end in the test suite on a virtual clock in milliseconds.
 
 ## See it run
 
-```
-make demo
+```bash
+git clone https://github.com/saikumardeepak1/switchboard
+cd switchboard
+uv sync && make demo
 ```
 
-About a second, no API keys. It prints the call above as a transcript, then the same call with a
+Needs Python 3.12+ and [uv](https://docs.astral.sh/uv/). The demo script is
+[`examples/demo.py`](examples/demo.py).
+
+The demo takes about a second and needs no API keys. It prints the call above as a transcript, then the same call with a
 model that misbehaves. From Part 2 ([full output](docs/demo-output.txt)): the courier asks about
 pay while the customer leg is still open, a wrong dollar amount is blocked before TTS, an early
 `mark_delivered` is blocked by policy, and the real one runs once after the customer confirms.
