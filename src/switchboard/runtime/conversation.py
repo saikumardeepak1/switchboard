@@ -5,8 +5,12 @@ appends through `emit`, which goes through the conversation's mailbox in the cor
 the actor appends to the store with the expected sequence number and folds the stored events into
 `state`. Nothing else mutates `state`, which is why `replay(log)` reproduces it.
 
-Things the log does not hold live beside it: memory read at setup (ADR-011), the text of retrieved
-knowledge (the log records fact and document ids with `as_of`, ADR-010), and running tasks.
+The log is the system of record, so it also holds the inputs the grounding gate reads that do
+not come from a tool: memory read at setup (`memory.loaded`, ADR-011) and the text of retrieved
+knowledge (`knowledge.retrieved`, ADR-010). `replay(log)` therefore rebuilds the exact evidence
+behind every gate decision. `Runtime(capture_content=False)` keeps that text out of the log; the
+live call still uses it, but replay can no longer reproduce those decisions. Telemetry export
+has its own content flag, off by default (ADR-015).
 """
 
 from __future__ import annotations
@@ -41,6 +45,7 @@ from switchboard.core import (
     KnowledgeRetrieved,
     LegClosed,
     LegOpened,
+    MemoryLoaded,
     ProcedureAdvanced,
     ToolExecuted,
     new_id,
@@ -55,7 +60,13 @@ from switchboard.effects import (
 from switchboard.grounding import Evidence, GroundingGate
 from switchboard.knowledge import BitemporalStore, Document, FactStore, KnowledgeIndex
 from switchboard.memory import MemoryStore, consolidate
-from switchboard.policy import CheckContext, ProcedureState, ProposedCall, Verdict
+from switchboard.policy import (
+    CheckContext,
+    ProcedureState,
+    ProposedCall,
+    RequestDetector,
+    Verdict,
+)
 from switchboard.policy.procedure import tool_succeeded
 from switchboard.runtime.admission import AdmissionController, AdmissionRejected
 from switchboard.runtime.io import Dialer, LegIO
@@ -120,6 +131,8 @@ class Conversation:
         self.router: Router = runtime.router or _bundle_router(bundle)
         self.runner = EffectRunner(bundle.registry, runtime.ledger, runtime.clock)
         self._knowledge: dict[str, str] = {}
+        # Knowledge and memory text held only here when content capture is off.
+        self._unlogged = Evidence()
         self._index = _knowledge_index(bundle, runtime.facts)
         self._tasks: set[asyncio.Task[Any]] = set()
 
@@ -183,26 +196,48 @@ class Conversation:
             return self.runtime.talker
         return self.runtime.llm
 
+    def requested_tools(self, text: str) -> list[str]:
+        """Write tools a committed user turn newly asks for (ADR-009)."""
+        writes = [name for name, effect in self.bundle.tool_effects().items() if effect == "write"]
+        return self.runtime.request_detector.requested(text, writes)
+
     def knowledge_texts(self) -> list[str]:
         return list(self._knowledge.values())
 
     def open_steps(self) -> tuple[str, ...]:
         graph = self.bundle.policy.procedure
-        return graph.open_steps(ProcedureState(frozenset(self.state.completed_steps)))
+        return graph.open_steps(ProcedureState(self.state.procedure_done(graph)))
 
     def grounding_evidence(self) -> Evidence:
-        return Evidence(
-            tool_results=[*self.state.tool_results, *self.state.child_results.values()],
-            facts=self.knowledge_texts(),
-            memory=self.memory_texts,
+        if self.runtime.capture_content:
+            # Kept current as events are appended, and exactly what replay rebuilds.
+            return self.state.grounding_evidence()
+        # The log lacks the text, so merge in what this process holds. Costs the index size.
+        return self.state.grounding_evidence().union(self._unlogged)
+
+    async def load_memory(self) -> None:
+        """Read memory once at setup and record what was read (ADR-011)."""
+        memory = self.runtime.memory
+        if memory is None:
+            return
+        items = memory.read(self.state.tenant_id, self.state.customer_id, self.clock.now())
+        self.memory_texts = [str(i.content.get("text") or canonical_json(i.content)) for i in items]
+        if not self.runtime.capture_content:
+            self._unlogged.add(self.memory_texts)
+        await self.emit(
+            MemoryLoaded,
+            leg_id=None,
+            count=len(self.memory_texts),
+            texts=self.memory_texts if self.runtime.capture_content else [],
         )
 
     def check(self, call: ToolCallChunk, tool_effects: Mapping[str, str]) -> Verdict:
         ctx = CheckContext(
-            evidence=dict(self.state.evidence),
+            evidence=self.state.evidence,
             state={"completed_steps": list(self.state.completed_steps)},
-            events=tuple(self.events),
             tool_effects=tool_effects,
+            index=self.state.index,
+            completed_steps=self.state.procedure_done(self.bundle.policy.procedure),
         )
         return self.bundle.policy.check(ProposedCall(call.name, call.args, call.call_id), ctx)
 
@@ -212,6 +247,8 @@ class Conversation:
         if not results:
             return
         for result in results:
+            if not self.runtime.capture_content and result.source_id not in self._knowledge:
+                self._unlogged.add(result.text)
             self._knowledge[result.source_id] = result.text
         await self.emit(
             KnowledgeRetrieved,
@@ -219,6 +256,7 @@ class Conversation:
             causation_id=causation_id,
             fact_ids=[r.source_id for r in results],
             as_of=now,
+            texts=[r.text for r in results] if self.runtime.capture_content else [],
         )
 
     async def execute(
@@ -228,7 +266,7 @@ class Conversation:
         tool: str,
         args: dict[str, Any],
         *,
-        step_seq: int,
+        intent: int,
         speculative: bool,
         causation_id: str | None,
     ) -> dict[str, Any]:
@@ -237,7 +275,7 @@ class Conversation:
 
         async def run() -> dict[str, Any]:
             result = await self.runner.run(
-                ToolCall(call_id, tool, args), EffectContext(self.id, step_seq, speculative)
+                ToolCall(call_id, tool, args), EffectContext(self.id, intent, speculative)
             )
             payload = result.result if result.ok and result.result is not None else None
             payload = payload if payload is not None else {"error": result.error or "failed"}
@@ -281,23 +319,7 @@ class Conversation:
             result = {"error": "outbound calling is not configured"}
         else:
             child_id = self.new_id("leg")
-            opened = await self.emit(
-                LegOpened,
-                leg_id=child_id,
-                causation_id=causation_id,
-                role="outbound_child",
-                party=party,
-                parent_leg_id=parent.leg_id,
-                goal=goal,
-            )
-            prompt = CHILD_PROMPT.format(
-                party=party,
-                agent=self.bundle.config.name,
-                description=config.description,
-                goal=goal,
-                questions="".join(f"Ask: {q}\n" for q in questions),
-            )
-            self._spawn(self._run_child(child_id, party, prompt, parent, opened.event_id))
+            await self._dial_child(child_id, party, goal, questions, parent, causation_id)
             result = {"status": "calling", "party": party, "child_leg_id": child_id}
         await self.emit(
             ToolExecuted,
@@ -307,6 +329,77 @@ class Conversation:
             tool=call.name,
             result=result,
         )
+
+    async def _dial_child(
+        self,
+        child_id: str,
+        party: str,
+        goal: str,
+        questions: Sequence[str],
+        parent: Leg,
+        causation_id: str | None,
+    ) -> None:
+        """Record the child leg as opened and start dialing it in the background.
+
+        A redial after recovery appends a second `leg.opened` for the same leg id; the fold
+        counts it, which is what stops a third dial.
+        """
+        config = self.bundle.config.parties[party]
+        opened = await self.emit(
+            LegOpened,
+            leg_id=child_id,
+            causation_id=causation_id,
+            role="outbound_child",
+            party=party,
+            parent_leg_id=parent.leg_id,
+            goal=goal,
+        )
+        prompt = CHILD_PROMPT.format(
+            party=party,
+            agent=self.bundle.config.name,
+            description=config.description,
+            goal=goal,
+            questions="".join(f"Ask: {q}\n" for q in questions),
+        )
+        self._spawn(self._run_child(child_id, party, prompt, parent, opened.event_id))
+
+    async def recover_children(self) -> None:
+        """Settle child legs that were open when the process died (ADR-003).
+
+        A child whose result never arrived is redialed once, under the same leg id (the
+        dialer's idempotency key), with the goal and questions of the `call_party` that opened
+        it. A child already redialed once, or whose party is gone from the bundle, is closed as
+        lost; one whose result did arrive is closed as completed.
+        """
+        parents = {leg_id: leg for leg_id, leg in self.legs.items() if not leg.closed}
+        for leg in list(self.state.legs.values()):
+            if not leg.open or leg.role != "outbound_child":
+                continue
+            parent = parents.get(leg.parent_leg_id or "")
+            if leg.leg_id in self.state.child_results:
+                await self.emit(LegClosed, leg_id=leg.leg_id, reason="completed")
+            elif (
+                leg.dials >= 2
+                or parent is None
+                or self.runtime.dialer is None
+                or leg.party not in self.bundle.config.parties
+            ):
+                await self.emit(LegClosed, leg_id=leg.leg_id, reason="lost_in_recovery")
+            else:
+                await self._dial_child(
+                    leg.leg_id,
+                    leg.party,
+                    leg.goal or "",
+                    self._child_questions(leg.leg_id),
+                    parent,
+                    None,
+                )
+
+    def _child_questions(self, child_id: str) -> list[str]:
+        for call in self.state.calls.values():
+            if call.tool == "call_party" and (call.result or {}).get("child_leg_id") == child_id:
+                return [str(q) for q in call.args.get("questions", []) or []]
+        return []
 
     async def _run_child(
         self, child_id: str, party: str, prompt: str, parent: Leg, opened_id: str
@@ -388,7 +481,7 @@ class Conversation:
     async def resume_pending(self) -> None:
         """Re-run calls the policy allowed but whose result never reached the log.
 
-        The idempotency key derives from the proposal's seq, which is in the log, so a write that
+        The idempotency key derives from the call's intent, which is in the log, so a write that
         did land before the crash comes back from the ledger instead of running again.
         """
         for call in self.state.pending_calls():
@@ -399,7 +492,7 @@ class Conversation:
                 call.call_id,
                 call.tool,
                 dict(call.args),
-                step_seq=call.proposed_seq,
+                intent=call.intent,
                 speculative=False,
                 causation_id=None,
             )
@@ -453,6 +546,8 @@ class Runtime:
         admission: AdmissionController | None = None,
         knowledge_k: int = 3,
         max_llm_calls: int = 6,
+        capture_content: bool = True,
+        request_detector: RequestDetector | None = None,
     ) -> None:
         self.clock = clock
         self.store = store
@@ -468,6 +563,9 @@ class Runtime:
         self.admission = admission or AdmissionController()
         self.knowledge_k = knowledge_k
         self.max_llm_calls = max_llm_calls
+        # Record knowledge and memory text in the log, the system of record (see module doc).
+        self.capture_content = capture_content
+        self.request_detector = request_detector or RequestDetector()
         self.conversations: dict[str, Conversation] = {}
         self.actors = ActorRuntime(self._actor, clock)
 
@@ -492,14 +590,10 @@ class Runtime:
             raise AdmissionRejected(decision)
         conv = Conversation(self, bundle, conversation_id)
         self.conversations[conversation_id] = conv
-        if self.memory is not None:
-            items = self.memory.read(tenant_id, customer_id, self.clock.now())
-            conv.memory_texts = [
-                str(i.content.get("text") or canonical_json(i.content)) for i in items
-            ]
         await conv.emit(
             ConversationStarted, leg_id=None, tenant_id=tenant_id, customer_id=customer_id
         )
+        await conv.load_memory()
         leg_id = new_id("leg", self.rng)
         await conv.emit(LegOpened, leg_id=leg_id, role="inbound", party=party)
         conv.attach_leg(_inbound_leg(conv, leg_id, party, io))
@@ -508,8 +602,8 @@ class Runtime:
     async def recover(self, bundle: Bundle, conversation_id: str, *, io: LegIO) -> Conversation:
         """Rebuild a conversation from its log after a crash and reattach the caller.
 
-        Pending allowed calls are re-run through the ledger. Child legs that were open are
-        closed: their media is gone with the process.
+        Pending allowed calls are re-run through the ledger. A child call whose result never
+        arrived is redialed once (see `Conversation.recover_children`).
         """
         events = await self.store.read(conversation_id)
         if not events:
@@ -531,16 +625,14 @@ class Runtime:
             raise AdmissionRejected(decision)
         conv = Conversation(self, bundle, conversation_id, state=state, events=events)
         self.conversations[conversation_id] = conv
-        if self.memory is not None:
-            items = self.memory.read(state.tenant_id, state.customer_id, self.clock.now())
-            conv.memory_texts = [
-                str(i.content.get("text") or canonical_json(i.content)) for i in items
-            ]
-        for leg in list(state.legs.values()):
-            if leg.open and leg.role == "outbound_child":
-                await conv.emit(LegClosed, leg_id=leg.leg_id, reason="lost_in_recovery")
+        if state.memory_captured:
+            conv.memory_texts = list(state.memory_texts)
+        else:
+            await conv.load_memory()
+        conv._knowledge.update(state.knowledge)
         await conv.resume_pending()
         conv.attach_leg(_inbound_leg(conv, inbound.leg_id, inbound.party, io))
+        await conv.recover_children()
         return conv
 
 

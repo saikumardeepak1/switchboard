@@ -109,17 +109,19 @@ Event catalog (type string, payload fields):
 | `leg.closed` | reason |
 | `turn.speculation_started` | turn_id, partial_text |
 | `turn.speculation_cancelled` | turn_id |
-| `turn.committed` | turn_id, text, endpointing_ms |
+| `turn.committed` | turn_id, text, endpointing_ms, requests (write tools newly asked for) |
+| `turn.backchannel` | text, utterance_id (said over agent speech; not a turn) |
 | `brain.routed` | turn_id, model_tier (`talker`/`thinker`), reason |
 | `tool.proposed` | call_id, tool, args |
 | `policy.verdict` | call_id, allowed, rule_ids, repair_hint |
 | `tool.executed` | call_id, tool, result, idempotency_key, replayed (bool) |
 | `tool.compensated` | call_id, compensation_tool, result |
 | `speech.sentence_gated` | utterance_id, sentence, decision (`release`/`block`/`escalate`), tier, claims |
-| `speech.played` | utterance_id, text_played, interrupted (bool) |
+| `speech.played` | utterance_id, text_played, interrupted (bool), tts_provider |
 | `procedure.advanced` | step, state |
 | `child.result` | child_leg_id, result |
-| `knowledge.retrieved` | fact_ids, as_of |
+| `knowledge.retrieved` | fact_ids, as_of, texts (empty with content capture off) |
+| `memory.loaded` | count, texts (empty with content capture off) |
 | `handoff.requested` | reason |
 | `conversation.ended` | outcome |
 
@@ -227,7 +229,8 @@ list[MemoryWrite]` turns a finished conversation's events into memory writes.
 
 `ToolSpec(name, effect: read|write, params schema, idempotency: list[str], compensate: str | None)`.
 `EffectRunner.run(call, ctx) -> ToolResult` checks the ledger for the derived key, runs at most once,
-records, and returns the recorded result on repeat with `replayed=True`.
+records, and returns the recorded result on repeat with `replayed=True`. The key is conversation
+id, tool, identity arguments and the per-tool intent counter in `ctx.intent` (ADR-009 revision).
 
 ### brain
 
@@ -248,6 +251,10 @@ order) followed by the volatile suffix, so provider prefix caches hit.
 `Leg` wires transport, endpointing, the speculative engine, the gate and playback for one party.
 `spawn_child(goal, party, result_schema)` opens an outbound child leg whose result arrives as a
 `child.result` event to the parent. `AdmissionController` enforces per-tenant concurrent-call caps.
+`runtime.twilio_session.TwilioSessionFactory` is the `api.media.SessionFactory` for Twilio Media
+Streams: one conversation per stream, caller PCM into a per-call STT, synthesized chunks out as
+`Utterance` plus mark, and `Clear` on barge-in. It is the one runtime module that imports `api`
+(only the transport types in `api.media`), and nothing in `api` imports `runtime`.
 
 ### sim
 

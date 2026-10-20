@@ -31,30 +31,18 @@ _EPS = 1e-9
 CORRECTION = "Sorry, I need to correct that last part, so please ignore it."
 
 
-class Spoken(str):
-    """A gated sentence on its way to TTS. A `str`, so it can sit in the turn engine's buffer.
+@dataclass(frozen=True, slots=True)
+class Spoken:
+    """A gated sentence on its way to TTS, as the turn engine buffers it.
 
     `end` marks the close of an utterance and carries no text. `verdict` is set for sentences
     still waiting on the tier 3 verifier.
     """
 
+    text: str
     utterance_id: str
-    end: bool
-    verdict: asyncio.Task[GateDecision] | None
-
-    def __new__(
-        cls,
-        text: str,
-        utterance_id: str,
-        *,
-        end: bool = False,
-        verdict: asyncio.Task[GateDecision] | None = None,
-    ) -> Spoken:
-        obj = super().__new__(cls, text)
-        obj.utterance_id = utterance_id
-        obj.end = end
-        obj.verdict = verdict
-        return obj
+    end: bool = field(default=False, kw_only=True)
+    verdict: asyncio.Task[GateDecision] | None = field(default=None, kw_only=True)
 
 
 @dataclass
@@ -66,10 +54,15 @@ class _Utterance:
     paused_at: float | None = None
     resumed: asyncio.Event = field(default_factory=asyncio.Event)
     unverified: list[asyncio.Task[GateDecision]] = field(default_factory=list)
+    providers: list[str] = field(default_factory=list)
+
+    @property
+    def provider(self) -> str | None:
+        return "+".join(self.providers) or None
 
 
-# Called with (utterance_id, text_played, interrupted); appends speech.played.
-PlayedCallback = Callable[[str, str, bool], Awaitable[None]]
+# Called with (utterance_id, text_played, interrupted, tts_provider); appends speech.played.
+PlayedCallback = Callable[[str, str, bool, str | None], Awaitable[None]]
 # Called with (utterance_id, sentence); records a correction sentence as released speech.
 CorrectionCallback = Callable[[str, str], Awaitable[None]]
 
@@ -103,6 +96,15 @@ class Speaker:
     @property
     def active(self) -> bool:
         return self._utterance is not None
+
+    @property
+    def speaking(self) -> bool:
+        """Audio is playing or queued to play."""
+        return not self._idle.is_set()
+
+    @property
+    def utterance_id(self) -> str | None:
+        return self._utterance.utterance_id if self._utterance is not None else None
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._run(), name="speaker")
@@ -157,7 +159,7 @@ class Speaker:
         await self._io.sink.clear()
         for task in u.unverified:
             task.cancel()
-        await self._on_played(u.utterance_id, text, True)
+        await self._on_played(u.utterance_id, text, True, u.provider)
         self._idle.set()
         self.start()
         await self._on_barge_in()
@@ -185,7 +187,7 @@ class Speaker:
             self._utterance = u
         if item.verdict is not None and not await self._verified(u, item.verdict):
             return
-        await self._synthesize(u, str(item))
+        await self._synthesize(u, item.text)
 
     async def _verified(self, u: _Utterance, verdict: asyncio.Task[GateDecision]) -> bool:
         """Race the verifier against the audio already queued. False means drop the sentence."""
@@ -210,6 +212,8 @@ class Speaker:
             now = self._clock.now()
             u.audio_end = max(now, u.audio_end) + chunk.duration_s
             u.cursor.enqueue(chunk.text, chunk.duration_s, now)
+            if chunk.provider is not None and chunk.provider not in u.providers:
+                u.providers.append(chunk.provider)
             await self._io.sink.send(chunk)
 
     async def _finish(self, u: _Utterance) -> None:
@@ -228,4 +232,5 @@ class Speaker:
                 break
             await self._clock.sleep(remaining)
         self._utterance = None
-        await self._on_played(u.utterance_id, u.cursor.advance(self._clock.now()), False)
+        played = u.cursor.advance(self._clock.now())
+        await self._on_played(u.utterance_id, played, False, u.provider)

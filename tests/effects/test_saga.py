@@ -6,7 +6,7 @@ from switchboard.effects.runner import EffectContext, EffectRunner, ToolCall
 from switchboard.effects.saga import Saga
 from tests.effects.tools import Bench, build_bench
 
-CTX = EffectContext(conversation_id="conv_1", step_seq=1)
+CTX = EffectContext(conversation_id="conv_1", intent=1)
 
 
 @pytest.fixture

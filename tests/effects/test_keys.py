@@ -6,11 +6,12 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from switchboard.effects import EffectContext
 from switchboard.effects.keys import canonical_json, compensation_key, idempotency_key
 
 
-def key(args: dict[str, Any], fields: list[str] | None = None, step: int = 3) -> str:
-    return idempotency_key("conv_1", step, "issue_refund", args, fields)
+def key(args: dict[str, Any], fields: list[str] | None = None, intent: int = 3) -> str:
+    return idempotency_key("conv_1", intent, "issue_refund", args, fields)
 
 
 def test_key_is_prefixed_with_tool_name_and_sha256() -> None:
@@ -48,8 +49,19 @@ def test_canonical_json_rejects_non_finite_floats() -> None:
         canonical_json({"a": float("nan")})
 
 
-def test_step_seq_separates_intents() -> None:
-    assert key({"order_id": "1"}, step=3) != key({"order_id": "1"}, step=4)
+def test_the_intent_counter_separates_intents() -> None:
+    assert key({"order_id": "1"}, intent=3) != key({"order_id": "1"}, intent=4)
+
+
+def test_the_key_does_not_depend_on_which_step_proposed_the_call() -> None:
+    # Nothing but conversation, intent, tool and identity args goes in: the same call proposed
+    # at a later step of the same intent gets the same key and replays.
+    ctx_a = EffectContext("conv_1", intent=2)
+    ctx_b = EffectContext("conv_1", intent=2)
+    assert ctx_a == ctx_b
+    assert idempotency_key("conv_1", 2, "t", {"x": 1}, None) == idempotency_key(
+        "conv_1", 2, "t", {"x": 1}, None
+    )
 
 
 def test_conversation_and_tool_separate_keys() -> None:

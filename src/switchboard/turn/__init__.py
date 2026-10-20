@@ -23,6 +23,7 @@ from switchboard.turn.signals import (
 )
 from switchboard.turn.speculative import (
     CancelToken,
+    GenerationContext,
     SpeculationMetrics,
     SpeculationRecord,
     SpeculativeTurnEngine,
@@ -40,6 +41,7 @@ __all__ = [
     "EndpointingConfig",
     "EndpointingController",
     "FinalTranscript",
+    "GenerationContext",
     "HeuristicCompleteness",
     "InputSignal",
     "PartialTranscript",

@@ -104,6 +104,44 @@ class Evidence:
         for source in (*tool_results, *facts, *memory):
             self.add(source)
 
+    def _parts(self) -> tuple[object, ...]:
+        return (
+            self.now_minutes,
+            self._money,
+            self._numbers,
+            self._times,
+            self._durations,
+            self._dates_md,
+            self._dates_iso,
+            self._ids,
+            self._words,
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Evidence):
+            return NotImplemented
+        return self._parts() == other._parts()
+
+    __hash__ = None  # type: ignore[assignment]
+
+    def __repr__(self) -> str:
+        return f"Evidence(ids={len(self._ids)}, numbers={len(self._numbers)})"
+
+    def union(self, other: Evidence) -> Evidence:
+        """A new evidence set holding both. Costs the size of the two indexes, not a re-walk."""
+        out = Evidence(now_minutes=self.now_minutes)
+        for ev in (self, other):
+            out._money |= ev._money
+            out._numbers |= ev._numbers
+            out._times |= ev._times
+            out._durations |= ev._durations
+            out._dates_md |= ev._dates_md
+            out._dates_iso |= ev._dates_iso
+            out._words |= ev._words
+            for key, display in ev._ids.items():
+                out._ids.setdefault(key, display)
+        return out
+
     # building
 
     def add(self, value: object, key: str | None = None) -> None:

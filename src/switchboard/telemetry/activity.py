@@ -34,6 +34,7 @@ from switchboard.core.events import (
     KnowledgeRetrieved,
     LegClosed,
     LegOpened,
+    MemoryLoaded,
     PolicyVerdict,
     ProcedureAdvanced,
     SpeechPlayed,
@@ -41,6 +42,7 @@ from switchboard.core.events import (
     ToolCompensated,
     ToolExecuted,
     ToolProposed,
+    TurnBackchannel,
     TurnCommitted,
     TurnSpeculationCancelled,
     TurnSpeculationStarted,
@@ -213,6 +215,8 @@ def _describe(e: AnyEvent) -> str:
             return f"Speculating on {e.partial_text!r}"
         case TurnSpeculationCancelled():
             return f"Speculation {e.turn_id} cancelled, caller kept talking"
+        case TurnBackchannel():
+            return f"Backchannel while the agent spoke: {e.text!r}"
         case TurnCommitted():
             return f"Turn committed after {e.endpointing_ms:.0f} ms endpointing: {e.text!r}"
         case BrainRouted():
@@ -244,6 +248,8 @@ def _describe(e: AnyEvent) -> str:
             return f"Child leg {e.child_leg_id} returned {len(e.result)} fields"
         case KnowledgeRetrieved():
             return f"Retrieved {len(e.fact_ids)} facts"
+        case MemoryLoaded():
+            return f"Loaded {e.count} memory items"
         case HandoffRequested():
             return f"Handoff requested: {e.reason}"
         case ConversationEnded():

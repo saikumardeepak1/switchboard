@@ -12,6 +12,7 @@ from switchboard.core.events import (
     KnowledgeRetrieved,
     LegClosed,
     LegOpened,
+    MemoryLoaded,
     PolicyVerdict,
     ProcedureAdvanced,
     SpeechPlayed,
@@ -19,6 +20,7 @@ from switchboard.core.events import (
     ToolCompensated,
     ToolExecuted,
     ToolProposed,
+    TurnBackchannel,
     TurnCommitted,
     TurnSpeculationCancelled,
     TurnSpeculationStarted,
@@ -44,6 +46,7 @@ def every_event_type(conversation_id: str = "conv_1") -> list[AnyEvent]:
         TurnSpeculationStarted(**b, turn_id="turn_1", partial_text="where is my"),
         TurnSpeculationCancelled(**b, turn_id="turn_1"),
         TurnCommitted(**b, turn_id="turn_1", text="where is my order", endpointing_ms=212.5),
+        TurnBackchannel(**b, text="mm-hm", utterance_id="utt_0"),
         BrainRouted(**b, turn_id="turn_1", model_tier="thinker", reason="tool needed"),
         ToolProposed(**b, call_id="call_1", tool="lookup_order", args={"order_id": "48213"}),
         PolicyVerdict(
@@ -75,7 +78,10 @@ def every_event_type(conversation_id: str = "conv_1") -> list[AnyEvent]:
         SpeechPlayed(**b, utterance_id="utt_1", text_played="It arrives", interrupted=True),
         ProcedureAdvanced(**b, step="verify_identity", state={"done": ["greet"]}),
         ChildResult(**b, child_leg_id="leg_2", result={"confirmed": True}),
-        KnowledgeRetrieved(**b, fact_ids=["fact_1", "fact_2"], as_of=99.5),
+        KnowledgeRetrieved(
+            **b, fact_ids=["fact_1", "fact_2"], as_of=99.5, texts=["Open late.", "Closed Monday."]
+        ),
+        MemoryLoaded(**b, count=1, texts=["Prefers short answers."]),
         HandoffRequested(**b, reason="refund above limit"),
         ConversationEnded(**b, outcome="resolved"),
     ]

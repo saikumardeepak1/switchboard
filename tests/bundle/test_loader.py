@@ -1,5 +1,6 @@
 import re
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -249,3 +250,35 @@ def test_example_bundle_loads(tmp_path: Path) -> None:
     copy = tmp_path / "copy"
     shutil.copytree(EXAMPLE, copy, ignore=shutil.ignore_patterns("__pycache__"))
     assert load_bundle(copy).bundle_id == bundle.bundle_id
+
+
+def _bundle_modules() -> set[str]:
+    return {name for name in sys.modules if name.startswith("_switchboard_bundle_")}
+
+
+def test_closing_a_bundle_removes_its_modules(tmp_path: Path) -> None:
+    before = _bundle_modules()
+    bundle = load_bundle(EXAMPLE)
+    loaded = _bundle_modules() - before
+    # The synthetic package, tools.py and the helper module tools.py imports.
+    assert {m.split(".", 1)[-1] for m in loaded if "." in m} == {"tools", "backend"}
+    assert bundle.module_namespace in loaded
+    bundle.close()
+    bundle.close()  # idempotent
+    assert _bundle_modules() == before
+
+
+def test_loading_the_same_bundle_twice_does_not_leak(tmp_path: Path) -> None:
+    before = _bundle_modules()
+    for _ in range(2):
+        with load_bundle(EXAMPLE) as bundle:
+            assert bundle.registry.get("mark_delivered") is not None
+    assert _bundle_modules() == before
+
+
+def test_a_tools_module_that_fails_to_import_leaves_nothing_behind(tmp_path: Path) -> None:
+    before = _bundle_modules()
+    root = write_bundle(tmp_path / "broken", **{"tools.py": "raise RuntimeError('boom')\n"})
+    with pytest.raises(BundleError, match="boom"):
+        load_bundle(root)
+    assert _bundle_modules() == before

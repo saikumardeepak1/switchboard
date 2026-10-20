@@ -56,11 +56,22 @@ class TurnSpeculationCancelled(Event):
     turn_id: str
 
 
+class TurnBackchannel(Event):
+    """ "Mm-hm", "okay" and the like said while the agent was speaking. Not a turn: playback
+    continues and the model never sees it. `utterance_id` is what was playing."""
+
+    type: Literal["turn.backchannel"] = "turn.backchannel"
+    text: str
+    utterance_id: str | None = None
+
+
 class TurnCommitted(Event):
     type: Literal["turn.committed"] = "turn.committed"
     turn_id: str
     text: str
     endpointing_ms: float
+    # Write tools this turn newly asks for; each opens a new idempotency intent (ADR-009).
+    requests: list[str] = Field(default_factory=list)
 
 
 class BrainRouted(Event):
@@ -116,6 +127,9 @@ class SpeechPlayed(Event):
     utterance_id: str
     text_played: str
     interrupted: bool
+    # The TTS provider that served the utterance, "+"-joined if it changed between sentences.
+    # None when the TTS in use does not report one.
+    tts_provider: str | None = None
 
 
 class ProcedureAdvanced(Event):
@@ -134,6 +148,17 @@ class KnowledgeRetrieved(Event):
     type: Literal["knowledge.retrieved"] = "knowledge.retrieved"
     fact_ids: list[str]
     as_of: float
+    # The retrieved text, aligned with `fact_ids`, so replay rebuilds the grounding evidence.
+    # Empty when the runtime runs with content capture off.
+    texts: list[str] = Field(default_factory=list)
+
+
+class MemoryLoaded(Event):
+    """Memory read once at call setup (ADR-011). `texts` is empty with content capture off."""
+
+    type: Literal["memory.loaded"] = "memory.loaded"
+    count: int
+    texts: list[str] = Field(default_factory=list)
 
 
 class HandoffRequested(Event):
@@ -153,6 +178,7 @@ AnyEvent = Annotated[
     | TurnSpeculationStarted
     | TurnSpeculationCancelled
     | TurnCommitted
+    | TurnBackchannel
     | BrainRouted
     | ToolProposed
     | PolicyVerdict
@@ -163,6 +189,7 @@ AnyEvent = Annotated[
     | ProcedureAdvanced
     | ChildResult
     | KnowledgeRetrieved
+    | MemoryLoaded
     | HandoffRequested
     | ConversationEnded,
     Field(discriminator="type"),

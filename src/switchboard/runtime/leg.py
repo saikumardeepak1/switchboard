@@ -10,6 +10,10 @@ tools proposed while the turn is still speculative get a `speculation:uncommitte
 and wait; once the turn commits they are checked by policy and run once. Agent-initiated turns
 (a child call result, an outbound call connecting) run the same loop without the engine.
 
+Backchannels. A burst of caller speech that starts while the agent is speaking and turns out to
+be only "mm-hm", "okay" and the like is recorded as `turn.backchannel` and nothing else: no
+speculation, no committed turn, and the barge-in policy already let playback continue.
+
 Brain loop, per turn: route, then up to `max_llm_calls` model calls. Text is split into
 sentences and each passes the grounding gate before it can reach TTS; one blocked sentence buys
 one regeneration with a rewrite hint. Tool calls are proposed, checked, and executed; a denial
@@ -45,6 +49,7 @@ from switchboard.core import (
     SpeechSentenceGated,
     ToolExecuted,
     ToolProposed,
+    TurnBackchannel,
     TurnCommitted,
     TurnSpeculationCancelled,
     TurnSpeculationStarted,
@@ -60,11 +65,13 @@ from switchboard.turn import (
     EndpointingConfig,
     EndpointingController,
     FinalTranscript,
+    GenerationContext,
     InputSignal,
     PartialTranscript,
     SpeculativeTurnEngine,
     TurnSignal,
     VadFrame,
+    is_backchannel,
     normalize_text,
 )
 
@@ -122,7 +129,9 @@ class Leg:
         self._endpointing = EndpointingController(
             EndpointingConfig(eager_threshold=eager_threshold)
         )
-        self._engine = SpeculativeTurnEngine(self._clock, self._generate)
+        self._engine: SpeculativeTurnEngine[Spoken, TurnContext] = SpeculativeTurnEngine(
+            self._clock, self._generate
+        )
         self.speaker = Speaker(
             io,
             self._clock,
@@ -133,10 +142,11 @@ class Leg:
         self._turn_lock = asyncio.Lock()
         self._signal_lock = asyncio.Lock()
         self._spec: TurnContext | None = None
-        self._next: TurnContext | None = None
         self._in_turn = False
         self._in_speech = False
         self._last_speech_at: float | None = None
+        # The utterance playing when the current caller burst began, if any.
+        self._over_utterance: str | None = None
         self._tasks: set[asyncio.Task[None]] = set()
         self._agent_turns: set[asyncio.Task[None]] = set()
         self._ticker: asyncio.Task[None] | None = None
@@ -216,6 +226,7 @@ class Leg:
             self._last_speech_at = signal.at
             if not self._in_turn:
                 self._in_turn = True
+                self._over_utterance = self.speaker.utterance_id if self.speaker.speaking else None
                 if self._ticker is None or self._ticker.done():
                     self._ticker = asyncio.create_task(self._tick_loop())
         if isinstance(signal, FinalTranscript) and not self._in_turn:
@@ -244,6 +255,16 @@ class Leg:
             if signal.kind == "resumed" or not signal.text.strip():
                 await self._cancel_speculation()
                 return
+            if self._over_utterance is not None and is_backchannel(signal.text):
+                if signal.kind == "end":
+                    await self.conversation.emit(
+                        TurnBackchannel,
+                        leg_id=self.leg_id,
+                        text=signal.text,
+                        utterance_id=self._over_utterance,
+                    )
+                    self._over_utterance = None
+                return
             if signal.kind == "eager_end":
                 await self._on_eager(signal)
             else:
@@ -258,8 +279,8 @@ class Leg:
         started = await self.conversation.emit(
             TurnSpeculationStarted, leg_id=self.leg_id, turn_id=turn_id, partial_text=signal.text
         )
-        self._spec = self._next = TurnContext(turn_id, started.event_id, signal.text)
-        await self._engine.handle(signal)
+        self._spec = ctx = TurnContext(turn_id, started.event_id, signal.text)
+        await self._engine.handle(signal, ctx, turn_id=turn_id)
 
     async def _on_end(self, signal: TurnSignal) -> None:
         spec, self._spec = self._spec, None
@@ -274,14 +295,14 @@ class Leg:
                 turn_id=spec.turn_id,
                 text=signal.text,
                 endpointing_ms=waited_ms,
+                requests=self.conversation.requested_tools(signal.text),
             )
             spec.text = signal.text
             await self._engine.handle(signal)  # promotes: the token stops being speculative
             spec.committed.set()
             return
         if spec is not None:
-            # The final text differs from the speculation. Cancel it (and wait for its task)
-            # before setting `_next`, so the old generation can never pick up the new context.
+            # The final text differs from the speculation: record its cancellation first.
             self._spec = spec
             await self._cancel_speculation()
         turn_id = self.conversation.new_id("turn")
@@ -291,11 +312,11 @@ class Leg:
             turn_id=turn_id,
             text=signal.text,
             endpointing_ms=waited_ms,
+            requests=self.conversation.requested_tools(signal.text),
         )
         ctx = TurnContext(turn_id, committed.event_id, signal.text)
         ctx.committed.set()
-        self._next = ctx
-        await self._engine.handle(signal)
+        await self._engine.handle(signal, ctx, turn_id=turn_id)
 
     async def _cancel_speculation(self) -> None:
         spec, self._spec = self._spec, None
@@ -312,26 +333,27 @@ class Leg:
         while True:
             try:
                 async for item in self._engine.committed_stream():
-                    if isinstance(item, Spoken):
-                        self.speaker.say(item)
+                    self.speaker.say(item)
             except Exception as exc:
                 self.conversation.record_failure(exc)
 
     async def _agent_turn(self, ctx: TurnContext) -> None:
         try:
             async for item in self._run_turn(ctx, CancelToken(speculative=False)):
-                if isinstance(item, Spoken):
-                    self.speaker.say(item)
+                self.speaker.say(item)
         except Exception as exc:
             self.conversation.record_failure(exc)
 
-    async def _played(self, utterance_id: str, text: str, interrupted: bool) -> None:
+    async def _played(
+        self, utterance_id: str, text: str, interrupted: bool, tts_provider: str | None
+    ) -> None:
         await self.conversation.emit(
             SpeechPlayed,
             leg_id=self.leg_id,
             utterance_id=utterance_id,
             text_played=text,
             interrupted=interrupted,
+            tts_provider=tts_provider,
         )
 
     async def _correction(self, utterance_id: str, sentence: str) -> None:
@@ -346,27 +368,21 @@ class Leg:
         )
 
     async def _barge_in(self) -> None:
-        """The caller took the floor: drop the rest of whatever the agent was saying."""
+        """The caller took the floor: drop the rest of whatever the agent was saying.
+
+        A speculation is never the agent's output; any live one started from the caller's
+        speech, usually the barge-in itself, so it is left to endpointing to promote or cancel.
+        """
         for task in list(self._agent_turns):
             task.cancel()
-        spec = self._spec
-        await self._engine.aclose()
-        if spec is not None:
-            self._spec = None
-            await self.conversation.emit(
-                TurnSpeculationCancelled, leg_id=self.leg_id, turn_id=spec.turn_id
-            )
+        await self._engine.cancel_committed()
 
     # the brain loop
 
-    async def _generate(self, text: str, token: CancelToken) -> AsyncIterator[str]:
-        # The engine passes only (text, token). Every launch is preceded by exactly one write to
-        # `_next`, and any earlier generation has been cancelled and awaited by then, so the
-        # slot holds this launch's context.
-        ctx, self._next = self._next, None
-        if ctx is None:
-            raise RuntimeError(f"leg {self.leg_id}: generation started without a turn context")
-        async for item in self._run_turn(ctx, token):
+    async def _generate(
+        self, text: str, gen: GenerationContext[TurnContext]
+    ) -> AsyncIterator[Spoken]:
+        async for item in self._run_turn(gen.payload, gen.token):
             yield item
 
     async def _run_turn(self, ctx: TurnContext, token: CancelToken) -> AsyncIterator[Spoken]:
@@ -573,7 +589,7 @@ class Leg:
             call.call_id,
             call.name,
             dict(call.args),
-            step_seq=proposed.seq,
+            intent=conv.state.calls[call.call_id].intent,
             speculative=token.speculative,
             causation_id=proposed.event_id,
         )
