@@ -3,7 +3,17 @@ import re
 
 import pytest
 
-from switchboard.core.events import SpeechPlayed, TurnCommitted
+from switchboard.core.events import (
+    BrainRouted,
+    PolicyVerdict,
+    SpeechPlayed,
+    SpeechSentenceGated,
+    ToolExecuted,
+    ToolProposed,
+    TurnCommitted,
+    TurnSpeculationCancelled,
+    TurnSpeculationStarted,
+)
 from switchboard.telemetry.turns import TurnTimeline, percentile, to_otlp_json
 from tests.telemetry.fixtures import BUNDLE, b, conv_a_events
 
@@ -183,3 +193,90 @@ def test_otlp_json_shape() -> None:
     gate = next(s for s in spans if s["name"] == "switchboard.gate")
     gattrs = {a["key"]: a["value"] for a in gate["attributes"]}
     assert gattrs["switchboard.gate.tier"] == {"intValue": "1"}
+
+
+def test_voice_to_voice_ends_at_first_audio_not_at_the_end_of_playback() -> None:
+    events = [
+        TurnCommitted(**b("c", 1.0), turn_id="t", text="x", endpointing_ms=200),
+        SpeechPlayed(
+            **b("c", 4.0),
+            utterance_id="t/u0",
+            text_played="A long answer.",
+            interrupted=False,
+            first_audio_at=1.5,
+        ),
+    ]
+    (t,) = TurnTimeline.from_events(events).turns
+    assert t.first_audio_at == 1.5
+    assert t.voice_to_voice_ms == pytest.approx(700)
+
+
+def test_played_event_without_first_audio_gives_no_voice_to_voice() -> None:
+    # Logs written before speech.played carried first_audio_at: the end of playback is not
+    # first audio, so no number is better than a wrong one.
+    events = [
+        TurnCommitted(**b("c", 1.0), turn_id="t", text="x", endpointing_ms=200),
+        SpeechPlayed(**b("c", 4.0), utterance_id="t/u0", text_played="Hi.", interrupted=False),
+    ]
+    (t,) = TurnTimeline.from_events(events).turns
+    assert t.voice_to_voice_ms is None
+
+
+def test_speculative_turn_owns_what_it_did_before_the_commit() -> None:
+    c = "c"
+    events = [
+        TurnCommitted(**b(c, 0.5), turn_id="t0", text="hello", endpointing_ms=100),
+        TurnSpeculationStarted(**b(c, 2.0), turn_id="t1", partial_text="pay"),
+        BrainRouted(
+            **b(c, 2.01), causation_id="anchor", turn_id="t1", model_tier="thinker", reason="tool"
+        ),
+        SpeechSentenceGated(
+            **b(c, 2.2),
+            causation_id="anchor",
+            utterance_id="t1/u0",
+            sentence="Let me check.",
+            decision="release",
+            tier=2,
+            claims=[],
+        ),
+        ToolProposed(**b(c, 2.2), causation_id="anchor", call_id="k1", tool="get_pay", args={}),
+        PolicyVerdict(**b(c, 2.21), call_id="k1", allowed=True, rule_ids=[]),
+        ToolExecuted(**b(c, 2.3), call_id="k1", tool="get_pay", result={"total": 1}),
+        TurnCommitted(
+            **b(c, 2.5), causation_id="anchor", turn_id="t1", text="pay", endpointing_ms=400
+        ),
+        SpeechPlayed(
+            **b(c, 3.4),
+            utterance_id="t1/u0",
+            text_played="Let me check.",
+            interrupted=False,
+            first_audio_at=2.65,
+        ),
+    ]
+    events[1] = events[1].model_copy(update={"event_id": "anchor"})
+    numbered = [e.model_copy(update={"seq": i}) for i, e in enumerate(events, 1)]
+    t0, t1 = TurnTimeline.from_events(numbered).turns
+    assert t0.tools == () and t0.gated == ()
+    assert t1.model_tier == "thinker"
+    assert t1.speculation_started_at == 2.0
+    assert t1.router_ms == pytest.approx(10)
+    assert t1.brain_first_output_ms == pytest.approx(190)
+    assert [tool.call_id for tool in t1.tools] == ["k1"]
+    assert t1.sentences_released == 1
+    assert t1.voice_to_voice_ms == pytest.approx(550)
+
+
+def test_cancelled_speculation_is_not_a_turn_and_takes_nothing_with_it() -> None:
+    c = "c"
+    events = [
+        TurnCommitted(**b(c, 0.5), turn_id="t0", text="hello", endpointing_ms=100),
+        TurnSpeculationStarted(**b(c, 2.0), turn_id="t1", partial_text="pay"),
+        BrainRouted(
+            **b(c, 2.01), causation_id="anchor", turn_id="t1", model_tier="talker", reason="x"
+        ),
+        TurnSpeculationCancelled(**b(c, 2.1), turn_id="t1"),
+    ]
+    events[1] = events[1].model_copy(update={"event_id": "anchor"})
+    numbered = [e.model_copy(update={"seq": i}) for i, e in enumerate(events, 1)]
+    (t0,) = TurnTimeline.from_events(numbered).turns
+    assert t0.model_tier is None

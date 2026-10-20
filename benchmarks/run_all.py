@@ -174,7 +174,7 @@ def summarize(data: dict[str, dict[str, Any]], timings: dict[str, float]) -> str
 
     s = data["speculation_latency"]["results"]["configs"]
     out += [
-        "## speculation_latency (voice to voice as the caller hears it)",
+        "## speculation_latency (voice to voice from TurnTimeline, end of speech to first audio)",
         "",
         markdown_table(
             [
@@ -182,6 +182,7 @@ def summarize(data: dict[str, dict[str, Any]], timings: dict[str, float]) -> str
                 "persona",
                 "v2v p50 ms",
                 "v2v p95 ms",
+                "caller-measured p50 ms",
                 "speculations",
                 "cancelled share",
                 "wasted output tokens",
@@ -192,6 +193,7 @@ def summarize(data: dict[str, dict[str, Any]], timings: dict[str, float]) -> str
                     c["persona"],
                     c["v2v_ms"]["p50"],
                     c["v2v_ms"]["p95"],
+                    c["caller_v2v_ms"]["p50"],
                     c["speculations_started"],
                     pct(c["wasted_speculation_ratio"]),
                     pct(c["wasted_output_token_ratio"]),

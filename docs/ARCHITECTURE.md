@@ -118,7 +118,7 @@ Event catalog (type string, payload fields):
 | `tool.compensated` | call_id, compensation_tool, result |
 | `tool.unresolved` | call_id, tool, idempotency_key, reason (still running at hang-up; ledger left pending) |
 | `speech.sentence_gated` | utterance_id, sentence, decision (`release`/`block`/`escalate`), tier, claims |
-| `speech.played` | utterance_id, text_played, interrupted (bool), tts_provider |
+| `speech.played` | utterance_id, text_played, interrupted (bool), tts_provider, first_audio_at |
 | `procedure.advanced` | step, state |
 | `child.result` | child_leg_id, result |
 | `knowledge.retrieved` | fact_ids, as_of, texts (empty with content capture off) |

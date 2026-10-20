@@ -54,6 +54,11 @@ def test_speculation_latency_sweeps_the_eager_threshold() -> None:
     off = next(row for row in rows if row["eager_threshold"] == "off")
     assert off["speculations_started"] == 0
     assert all(row["v2v_ms"]["p50"] is not None for row in rows)
+    # Voice to voice comes from TurnTimeline; the caller's own measurement cross-checks it.
+    clean = [row for row in rows if row["persona"] == "clean"]
+    for row in clean:
+        assert row["v2v_source"] == "turn_timeline"
+        assert abs(row["v2v_ms"]["p50"] - row["caller_v2v_ms"]["p50"]) < 1.0
 
 
 def test_endpointing_compares_three_controllers() -> None:
