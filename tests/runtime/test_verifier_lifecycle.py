@@ -93,3 +93,36 @@ async def test_closing_a_leg_cancels_its_pending_verdicts() -> None:
     assert task.done()
     task.result()
     assert all(t.done() for t in leg._verdicts)
+
+
+class BrokenVerifier:
+    async def verify(self, sentence: str, evidence: Evidence) -> VerifierVerdict:
+        raise RuntimeError("verifier provider 503")
+
+
+async def test_a_failing_verifier_blocks_and_the_speaker_keeps_going() -> None:
+    world = make_world()
+    world.gate = GroundingGate(MiddlingScorer(), BrokenVerifier())
+    world.runtime = world.new_runtime()
+    conv = await world.start()
+    leg = next(iter(conv.legs.values()))
+
+    async def courier(c: SimParty) -> None:
+        await c.say("Hi, this is courier C-77.")
+        await c.clock.sleep(5.0)
+        await c.say("What is my pay this week?")
+        await c.hear("182.40")
+        await c.quiet()
+
+    task = asyncio.ensure_future(courier(world.courier))
+    await world.clock.run_until_idle()
+    assert task.done(), "the speaker died and the pay answer never played"
+    task.result()
+    assert leg.speaker._task is not None and not leg.speaker._task.done()
+    assert any(isinstance(f, RuntimeError) for f in conv.failures)
+    events = await world.events(conv)
+    tier3 = [(e.sentence, e.decision) for e in every(events, "speech.sentence_gated", tier=3)]
+    assert tier3 and all(decision == "block" for _, decision in tier3)
+    # Escalated sentences never reached TTS; the tier 1 grounded one did.
+    assert world.courier.tts.texts == ["You've earned $182.40 this week across 23 deliveries."]
+    await conv.end("resolved")

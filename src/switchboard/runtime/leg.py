@@ -138,6 +138,7 @@ class Leg:
             on_played=self._played,
             on_correction=self._correction,
             on_barge_in=self._barge_in,
+            on_error=conversation.record_failure,
         )
         self._turn_lock = asyncio.Lock()
         self._signal_lock = asyncio.Lock()
@@ -528,7 +529,19 @@ class Leg:
             return None, decision
 
         async def settle() -> GateDecision:
-            final = await conv.gate.resolve(decision, sentence, evidence)
+            try:
+                final = await conv.gate.resolve(decision, sentence, evidence)
+            except Exception as exc:
+                # Fail closed: an unanswered verification is a block, and the call goes on.
+                conv.record_failure(exc)
+                final = GateDecision(
+                    "block",
+                    3,
+                    decision.claims,
+                    decision.unsupported,
+                    f"verifier failed: {type(exc).__name__}",
+                    score=decision.score,
+                )
             await conv.emit(
                 SpeechSentenceGated,
                 leg_id=self.leg_id,
