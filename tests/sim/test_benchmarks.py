@@ -89,13 +89,19 @@ async def test_serve_populates_a_store_the_api_can_read() -> None:
     from fastapi.testclient import TestClient
 
     from benchmarks.serve import populate
+    from switchboard.api import Principal, StaticTokenAuthenticator
     from switchboard.api.app import create_app
     from switchboard.core import InMemoryEventStore
 
     store = InMemoryEventStore()
     ids = await populate(store, calls=2)
     assert len(ids) == 2
-    client = TestClient(create_app(store))
+    # Reads need a principal of the tenant that owns the calls.
+    tenant = (await store.read(ids[0]))[0].tenant_id  # type: ignore[union-attr]
+    auth = StaticTokenAuthenticator({"sim-token": Principal(tenant)})
+    client = TestClient(
+        create_app(store, authenticator=auth), headers={"Authorization": "Bearer sim-token"}
+    )
     body = client.get(f"/v1/conversations/{ids[0]}").json()
     assert body["timeline"]["turns"]
     assert client.get("/v1/activity", params={"conversation_id": ids[1]}).json()["items"]
