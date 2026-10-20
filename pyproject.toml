@@ -21,7 +21,7 @@ dev = [
   "hypothesis>=6.112",
   "ruff>=0.7",
   "mypy>=1.13",
-  "httpx>=0.27",
+  "httpx2",
   "fastapi>=0.115",
 ]
 
