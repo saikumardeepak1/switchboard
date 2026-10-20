@@ -12,7 +12,7 @@ Merging rules across documents:
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
 from switchboard.policy.checker import CompiledPolicy, Rule
@@ -146,7 +146,9 @@ class _Builder:
             raise CompileError(f"{where}: effect must be 'read' or 'write', got {effect!r}")
         return tools, effect
 
-    def build(self, tool_effects: Mapping[str, str]) -> CompiledPolicy:
+    def build(
+        self, tool_effects: Mapping[str, str], compensation_only: frozenset[str]
+    ) -> CompiledPolicy:
         try:
             graph = ProcedureGraph(
                 steps=tuple(self.steps or ()),
@@ -155,17 +157,24 @@ class _Builder:
             )
         except ValueError as err:
             raise CompileError(f"procedure: {err}") from err
-        return CompiledPolicy(tuple(self.rules), graph, tool_effects)
+        return CompiledPolicy(tuple(self.rules), graph, tool_effects, compensation_only)
 
 
 def compile_policies(
-    docs: Sequence[Mapping[str, Any]], *, tool_effects: Mapping[str, str] | None = None
+    docs: Sequence[Mapping[str, Any]],
+    *,
+    tool_effects: Mapping[str, str] | None = None,
+    compensation_only: Collection[str] = (),
 ) -> CompiledPolicy:
-    """Validate and merge policy documents. Raises `CompileError` with the offending location."""
+    """Validate and merge policy documents. Raises `CompileError` with the offending location.
+
+    `compensation_only` names tools that only the runtime may run, as compensations (ADR-009);
+    the compiled policy denies any proposal of one.
+    """
     for tool, effect in (tool_effects or {}).items():
         if effect not in EFFECTS:
             raise CompileError(f"tool_effects[{tool!r}] must be 'read' or 'write', got {effect!r}")
     builder = _Builder()
     for index, doc in enumerate(docs):
         builder.add_document(index, doc)
-    return builder.build(tool_effects or {})
+    return builder.build(tool_effects or {}, frozenset(compensation_only))

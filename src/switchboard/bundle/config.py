@@ -29,6 +29,7 @@ _TOP_KEYS = frozenset(
         "handoff_message",
         "runtime_tools",
         "parties",
+        "rollback_on",
     }
 )
 _VOICE_KEYS = frozenset({"voice_id", "ttfb_s", "chars_per_s"})
@@ -98,6 +99,8 @@ class AgentConfig:
     handoff_message: str = DEFAULT_HANDOFF_MESSAGE
     runtime_tools: tuple[str, ...] = ()
     parties: Mapping[str, PartyConfig] = field(default_factory=dict)
+    # Conversation outcomes (and "turn_aborted") after which the runtime compensates writes.
+    rollback_on: tuple[str, ...] = ()
 
 
 def _mapping(value: object, where: str) -> Mapping[str, Any]:
@@ -238,6 +241,9 @@ def parse_agent_config(raw: object) -> AgentConfig:
             raise ConfigError(
                 f"agent.yaml: unknown runtime tool {name!r}; known: {sorted(RUNTIME_TOOLS)}"
             )
+    rollback_on = raw.get("rollback_on") or []
+    if not isinstance(rollback_on, list) or not all(isinstance(o, str) for o in rollback_on):
+        raise ConfigError("agent.yaml: rollback_on must be a list of outcome names")
     parties = _parties(raw.get("parties") or {})
     if parties and "call_party" not in runtime_tools:
         raise ConfigError("agent.yaml: 'parties' needs runtime tool 'call_party'")
@@ -254,4 +260,5 @@ def parse_agent_config(raw: object) -> AgentConfig:
         handoff_message=_str(raw, "handoff_message", where, DEFAULT_HANDOFF_MESSAGE),
         runtime_tools=tuple(dict.fromkeys(runtime_tools)),
         parties=MappingProxyType(parties),
+        rollback_on=tuple(dict.fromkeys(rollback_on)),
     )

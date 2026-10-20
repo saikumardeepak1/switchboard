@@ -47,6 +47,7 @@ from switchboard.core import (
     LegOpened,
     MemoryLoaded,
     ProcedureAdvanced,
+    ToolCompensated,
     ToolExecuted,
     new_id,
 )
@@ -54,7 +55,9 @@ from switchboard.effects import (
     EffectContext,
     EffectRunner,
     IdempotencyLedger,
+    Saga,
     ToolCall,
+    ToolResult,
     ToolSpec,
 )
 from switchboard.grounding import Evidence, GroundingGate
@@ -302,6 +305,59 @@ class Conversation:
 
         return await asyncio.shield(self._spawn(run()))
 
+    async def rollback(self, call_ids: Sequence[str] | None = None) -> None:
+        """Compensate executed writes, newest first, with the compensations their specs declare.
+
+        `call_ids` limits the rollback to those calls. Every compensation goes through the
+        ledger under a key derived from the original, and a call already compensated in the log
+        is skipped, so a second rollback runs nothing twice (ADR-009).
+        """
+        saga = Saga(self.runner)
+        done = set(self.state.compensations)
+        chosen = None if call_ids is None else set(call_ids)
+        calls = [
+            c
+            for c in self.state.calls.values()
+            if c.executed
+            and not c.replayed
+            and c.call_id not in done
+            and (chosen is None or c.call_id in chosen)
+            and self.runner.compensation_for(c.tool) is not None
+        ]
+        for call in sorted(calls, key=lambda c: c.executed_seq or 0):
+            saga.record(
+                ToolResult(
+                    call.call_id,
+                    call.tool,
+                    dict(call.args),
+                    ok=tool_succeeded(call.result or {}),
+                    result=call.result,
+                    idempotency_key=call.idempotency_key,
+                )
+            )
+        report = await saga.abort(EffectContext(self.id, 0))
+        legs = {c.call_id: c.leg_id for c in calls}
+        for outcome in report.outcomes:
+            undo = outcome.result
+            if outcome.compensation_tool is None or undo is None:
+                continue
+            payload = undo.result if undo.ok and undo.result is not None else None
+            await self.emit(
+                ToolCompensated,
+                leg_id=legs.get(outcome.call_id),
+                call_id=outcome.call_id,
+                compensation_tool=outcome.compensation_tool,
+                result=payload if payload is not None else {"error": undo.error or "failed"},
+            )
+
+    async def abort_turn(self, turn_id: str) -> None:
+        """The runtime gave up on a turn: undo its writes if the bundle asks for that."""
+        if "turn_aborted" not in self.bundle.config.rollback_on:
+            return
+        turn = self.state.turns.get(turn_id)
+        if turn is not None and turn.call_ids:
+            await self.rollback(list(turn.call_ids))
+
     # multi-party (ADR-003)
 
     async def call_party(self, parent: Leg, call: ToolCallChunk, causation_id: str) -> None:
@@ -505,6 +561,8 @@ class Conversation:
                 await leg.close("conversation_ended")
         for task in list(self._tasks):
             task.cancel()
+        if outcome in self.bundle.config.rollback_on:
+            await self.rollback()
         await self.emit(ConversationEnded, leg_id=None, outcome=outcome)
         if self.runtime.memory is not None:
             self.runtime.memory.apply(consolidate(self.events, self.clock.now()))

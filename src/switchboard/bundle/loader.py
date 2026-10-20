@@ -68,6 +68,8 @@ class Bundle:
     tools_module: ModuleType
     # The synthetic package `tools.py` was imported under; see `close`.
     module_namespace: str = ""
+    # Compensation targets: run by the runtime only, never offered to or callable by the model.
+    compensation_tools: frozenset[str] = frozenset()
 
     def close(self) -> None:
         """Drop this load's modules from `sys.modules`. Idempotent.
@@ -84,8 +86,10 @@ class Bundle:
         self.close()
 
     def tool_specs(self) -> list[ToolSpec]:
-        """Every tool the model may call: registry tools and declared runtime tools, by name."""
-        return sorted([*self.registry.specs(), *self.runtime_tools], key=lambda s: s.name)
+        """Every tool the model may call, by name: registry tools except compensations, and
+        declared runtime tools."""
+        specs = [s for s in self.registry.specs() if s.name not in self.compensation_tools]
+        return sorted([*specs, *self.runtime_tools], key=lambda s: s.name)
 
     def tool_effects(self) -> dict[str, str]:
         return {spec.name: spec.effect for spec in self.tool_specs()}
@@ -119,11 +123,14 @@ def _build(root: Path, config: AgentConfig, module: ModuleType, namespace: str) 
 
     specs = sorted([*registry.specs(), *runtime_tools], key=lambda s: s.name)
     effects = {spec.name: spec.effect for spec in specs}
+    compensations = frozenset(s.compensate for s in registry.specs() if s.compensate)
     docs = _load_policy_docs(root)
     for rel, doc in docs:
         _check_references(rel, doc, set(effects))
     try:
-        policy = compile_policies([doc for _, doc in docs], tool_effects=effects)
+        policy = compile_policies(
+            [doc for _, doc in docs], tool_effects=effects, compensation_only=compensations
+        )
     except CompileError as err:
         raise BundleError(f"policies: {err}") from err
 
@@ -140,6 +147,7 @@ def _build(root: Path, config: AgentConfig, module: ModuleType, namespace: str) 
         documents=_load_documents(root),
         tools_module=module,
         module_namespace=namespace,
+        compensation_tools=compensations,
     )
 
 

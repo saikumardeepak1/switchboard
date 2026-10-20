@@ -228,7 +228,7 @@ def test_runtime_tools_join_the_effect_map_and_tool_specs(tmp_path: Path) -> Non
     assert bundle.runtime_tools == (CALL_PARTY,)
     assert bundle.policy.tool_effects["call_party"] == "write"
     assert bundle.config.parties["customer"].confirms == "ok"
-    assert [s.name for s in bundle.tool_specs()] == ["call_party", "charge", "lookup", "refund"]
+    assert [s.name for s in bundle.tool_specs()] == ["call_party", "charge", "lookup"]
 
 
 def test_parties_need_call_party(tmp_path: Path) -> None:
@@ -282,3 +282,35 @@ def test_a_tools_module_that_fails_to_import_leaves_nothing_behind(tmp_path: Pat
     with pytest.raises(BundleError, match="boom"):
         load_bundle(root)
     assert _bundle_modules() == before
+
+
+def test_compensations_are_hidden_from_the_model_and_denied_if_proposed(tmp_path: Path) -> None:
+    bundle = load_bundle(write_bundle(tmp_path / "mini"))
+    assert bundle.compensation_tools == frozenset({"refund"})
+    assert "refund" not in [s.name for s in bundle.tool_specs()]
+    assert "refund" not in bundle.tool_effects()
+    verdict = bundle.policy.check(
+        ProposedCall("refund", {"amount": 5}), CheckContext(completed_steps=frozenset({"verify"}))
+    )
+    assert not verdict.allowed
+    assert verdict.rule_ids == ["runtime:compensation_only"]
+    assert verdict.repair_hint is not None and "runtime" in verdict.repair_hint
+
+
+def test_example_bundle_offers_no_compensation_to_the_model() -> None:
+    bundle = load_bundle(EXAMPLE)
+    names = [s.name for s in bundle.tool_specs()]
+    assert "unmark_delivered" not in names and "reverse_refund" not in names
+    for tool in ("unmark_delivered", "reverse_refund"):
+        verdict = bundle.policy.check(ProposedCall(tool, {"order_id": "1"}), CheckContext())
+        assert "runtime:compensation_only" in verdict.rule_ids
+
+
+def test_rollback_on_defaults_to_nothing_and_takes_outcome_names(tmp_path: Path) -> None:
+    assert load_bundle(write_bundle(tmp_path / "a")).config.rollback_on == ()
+    agent = AGENT_YAML + "rollback_on: [handoff_failed, turn_aborted]\n"
+    bundle = load_bundle(write_bundle(tmp_path / "b", **{"agent.yaml": agent}))
+    assert bundle.config.rollback_on == ("handoff_failed", "turn_aborted")
+    bad = AGENT_YAML + "rollback_on: handoff_failed\n"
+    with pytest.raises(BundleError, match="rollback_on"):
+        load_bundle(write_bundle(tmp_path / "c", **{"agent.yaml": bad}))

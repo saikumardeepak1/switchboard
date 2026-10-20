@@ -432,9 +432,11 @@ class Leg:
                 if "denied" in outcomes:
                     denials += 1
                     if denials > conv.bundle.config.max_policy_retries:
+                        await conv.abort_turn(ctx.turn_id)
                         async for spoken in self._handoff(ctx, f"{denials} policy denials"):
                             yield spoken
                         return
+            await conv.abort_turn(ctx.turn_id)
             async for spoken in self._handoff(ctx, "model call budget exhausted"):
                 yield spoken
 
@@ -573,7 +575,7 @@ class Leg:
             tool=call.name,
             args=dict(call.args),
         )
-        if call.name not in self.tool_effects:
+        if call.name not in self.tool_effects and call.name not in conv.bundle.compensation_tools:
             await conv.emit(
                 ToolExecuted,
                 leg_id=self.leg_id,
@@ -583,7 +585,7 @@ class Leg:
                 result={"error": f"tool {call.name!r} is not available on this call"},
             )
             return "ok"
-        if self.tool_effects[call.name] == "write" and token.speculative:
+        if self.tool_effects.get(call.name, "write") == "write" and token.speculative:
             await conv.emit(
                 PolicyVerdict,
                 leg_id=self.leg_id,

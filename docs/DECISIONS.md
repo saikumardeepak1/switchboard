@@ -156,6 +156,13 @@ from the ledger; a real second request ("refund another ten dollars") runs. The 
 the detector misses reuses the old key and replays instead of running, which fails safe for
 writes, and a bundle can name its own cue words when the tool name is a poor cue.
 
+**Wiring (2026-10).** Compensation targets are hidden from the model: `Bundle.tool_specs()`
+leaves them out, and the compiled policy denies any proposal of one with rule
+`runtime:compensation_only`. The runtime runs them through `Saga`: when a conversation ends with
+an outcome listed in `agent.yaml` `rollback_on` (default empty), and, if `turn_aborted` is listed,
+when it hands off a turn it gave up on, it compensates that scope's writes newest first and
+records `tool.compensated`.
+
 ## ADR-010: Knowledge is bitemporal; incidents expire on their own
 
 **Decision.** Every fact has valid time (when it is true in the world) and transaction time (when

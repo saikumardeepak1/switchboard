@@ -379,7 +379,8 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
                 )
             )
         case ToolCompensated():
-            state.compensations.append(event.call_id)
+            if tool_succeeded(event.result):
+                state.compensations.append(event.call_id)
         case SpeechSentenceGated():
             if event.decision == "release":
                 entry = _utterance_entry(state, event.leg_id, event.utterance_id)
