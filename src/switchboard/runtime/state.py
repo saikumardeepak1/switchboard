@@ -102,6 +102,7 @@ class CallState:
     replayed: bool = False
     # The request this call serves (ADR-009); fixed when its turn commits.
     intent: int = 0
+    executed_seq: int | None = None
 
     @property
     def allowed(self) -> bool:
@@ -133,8 +134,10 @@ class ConversationState:
     history: dict[str, list[HistoryEntry]] = field(default_factory=dict)
     calls: dict[str, CallState] = field(default_factory=dict)
     evidence: dict[str, Any] = field(default_factory=dict)
-    # Requests the user has made per write tool, from `turn.committed`.
+    # Requests the user has made per write tool, from inbound `turn.committed` events.
     intents: dict[str, int] = field(default_factory=dict)
+    # Seq of the turn that last opened each tool's current intent.
+    intent_opened: dict[str, int] = field(default_factory=dict)
     tool_results: list[dict[str, Any]] = field(default_factory=list)
     completed_steps: list[str] = field(default_factory=list)
     child_results: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -225,6 +228,26 @@ def _utterance_entry(
     return entry
 
 
+def _intent_for(state: ConversationState, tool: str, args: Mapping[str, Any]) -> int:
+    """The intent a proposal of `tool` with `args` serves (ADR-009).
+
+    Normally the tool's current counter. But when the same call already ran and no request was
+    opened after it ran, the proposal repeats that call: it takes the earlier call's intent, so
+    its key matches and the ledger replays it, even if the counter moved while it was in flight.
+    """
+    current = state.intents.get(tool, 0)
+    opened = state.intent_opened.get(tool, 0)
+    canonical = canonical_json(dict(args))
+    for prior in reversed(state.calls.values()):
+        if (
+            prior.tool == tool
+            and prior.executed_seq is not None
+            and canonical_json(prior.args) == canonical
+        ):
+            return prior.intent if opened < prior.executed_seq else current
+    return current
+
+
 def apply_event(state: ConversationState, event: AnyEvent) -> None:
     state.last_seq = event.seq
     state.index.add(event)
@@ -266,8 +289,12 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
             if event.turn_id in state.turns:
                 state.turns[event.turn_id].status = "cancelled"
         case TurnCommitted():
-            for tool in event.requests:
-                state.intents[tool] = state.intents.get(tool, 0) + 1
+            leg = state.legs.get(event.leg_id or "")
+            if leg is not None and leg.role == "inbound":
+                # Only the inbound party asks for actions; a child call's party answers questions.
+                for tool in event.requests:
+                    state.intents[tool] = state.intents.get(tool, 0) + 1
+                    state.intent_opened[tool] = event.seq
             turn = state.turns.get(event.turn_id)
             if turn is not None and turn.status == "speculating":
                 turn.status = "committed"
@@ -275,7 +302,7 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
                 # Calls proposed while speculating serve the request this commit opened.
                 for call_id in turn.call_ids:
                     waiting = state.calls[call_id]
-                    waiting.intent = state.intents.get(waiting.tool, 0)
+                    waiting.intent = _intent_for(state, waiting.tool, waiting.args)
                 for entry in _history(state, event.leg_id):
                     if entry.role == "user" and entry.turn_id == event.turn_id:
                         entry.content = event.text
@@ -302,7 +329,7 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
                 dict(event.args),
                 event.seq,
                 turn_id,
-                intent=state.intents.get(event.tool, 0),
+                intent=_intent_for(state, event.tool, event.args),
             )
             if turn_id is not None and turn_id in state.turns:
                 state.turns[turn_id].call_ids.append(event.call_id)
@@ -333,6 +360,7 @@ def apply_event(state: ConversationState, event: AnyEvent) -> None:
             call = state.calls.get(event.call_id)
             if call is not None:
                 call.executed = True
+                call.executed_seq = event.seq
                 call.result = dict(event.result)
                 call.idempotency_key = event.idempotency_key
                 call.replayed = event.replayed

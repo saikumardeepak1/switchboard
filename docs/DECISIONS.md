@@ -147,8 +147,11 @@ crash replays of one proposal, but models re-propose writes in later turns ("tha
 marked now?"), and each re-proposal got a new step, a new key and a second downstream write. The
 key is now conversation id, tool, canonical identity arguments and an explicit intent counter
 per tool. The policy layer moves the counter only when a committed user turn makes a new request
-for that tool (`RequestDetector`, cue words per tool, status questions excluded), and records it
-on `turn.committed` so recovery derives the same key. A re-proposal in the same request replays
+for that tool (`RequestDetector`, cue words per tool plus a request cue or imperative at clause
+start; thanks, status questions and statements about what already happened are excluded), and
+records it on `turn.committed` so recovery derives the same key. Only the inbound caller's turns
+count; a child call's party answers questions and opens nothing. A proposal identical to a call
+that already ran replays it unless a request was opened after that call ran. A re-proposal in the same request replays
 from the ledger; a real second request ("refund another ten dollars") runs. The cost: a request
 the detector misses reuses the old key and replays instead of running, which fails safe for
 writes, and a bundle can name its own cue words when the tool name is a poor cue.

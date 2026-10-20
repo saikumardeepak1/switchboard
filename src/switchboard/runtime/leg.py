@@ -304,7 +304,7 @@ class Leg:
                 turn_id=spec.turn_id,
                 text=signal.text,
                 endpointing_ms=waited_ms,
-                requests=self.conversation.requested_tools(signal.text),
+                requests=self._requests(signal.text),
             )
             spec.text = signal.text
             await self._engine.handle(signal)  # promotes: the token stops being speculative
@@ -321,11 +321,15 @@ class Leg:
             turn_id=turn_id,
             text=signal.text,
             endpointing_ms=waited_ms,
-            requests=self.conversation.requested_tools(signal.text),
+            requests=self._requests(signal.text),
         )
         ctx = TurnContext(turn_id, committed.event_id, signal.text)
         ctx.committed.set()
         await self._engine.handle(signal, ctx, turn_id=turn_id)
+
+    def _requests(self, text: str) -> list[str]:
+        # A child call's party answers the agent's questions; only the inbound caller asks.
+        return self.conversation.requested_tools(text) if self.role == "inbound" else []
 
     async def _cancel_speculation(self) -> None:
         spec, self._spec = self._spec, None
