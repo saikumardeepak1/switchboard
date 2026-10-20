@@ -1,0 +1,154 @@
+{
+  "benchmark": "cost",
+  "note": "Simulated on a virtual clock. Latencies come from configured provider latency distributions, so they measure the architecture's scheduling, not real providers.",
+  "params": {
+    "n": 30,
+    "prices": {
+      "cache_write_multiplier": 1.25,
+      "cached_input_multiplier": 0.1,
+      "models": {
+        "talker": {
+          "input_per_m": 0.1,
+          "output_per_m": 0.5
+        },
+        "thinker": {
+          "input_per_m": 2.0,
+          "output_per_m": 10.0
+        }
+      },
+      "note": "assumptions; see switchboard.sim.cost for sources",
+      "stt_per_min": 0.0077,
+      "telephony_per_min": 0.014,
+      "tokens_per_word": 1.3,
+      "tts_per_1k_chars": 0.04
+    },
+    "scenario": "chatty_delivery"
+  },
+  "platform": "macOS-15.7.3",
+  "python": "3.12.12",
+  "results": {
+    "configs": [
+      {
+        "cache": "auto",
+        "llm_calls": {
+          "talker": 120,
+          "thinker": 360
+        },
+        "llm_share": 0.19407598793609393,
+        "mean_minutes": 0.8519852174652948,
+        "pass_rate": 1.0,
+        "per_minute": {
+          "llm": 0.013356834054612243,
+          "stt": 0.010485457690857559,
+          "telephony": 0.019064468528831927,
+          "total": 0.06882270288383348,
+          "tts": 0.025915942609531745
+        },
+        "routing": "talker_thinker",
+        "runs": 30,
+        "turns_routed_to_talker": 0.36363636363636365
+      },
+      {
+        "cache": "always_hit",
+        "llm_calls": {
+          "talker": 120,
+          "thinker": 360
+        },
+        "llm_share": 0.16781051685704096,
+        "mean_minutes": 0.8519852174652948,
+        "pass_rate": 1.0,
+        "per_minute": {
+          "llm": 0.011184659629443434,
+          "stt": 0.010485457690857559,
+          "telephony": 0.019064468528831927,
+          "total": 0.06665052845866465,
+          "tts": 0.025915942609531745
+        },
+        "routing": "talker_thinker",
+        "runs": 30,
+        "turns_routed_to_talker": 0.36363636363636365
+      },
+      {
+        "cache": "never",
+        "llm_calls": {
+          "talker": 120,
+          "thinker": 360
+        },
+        "llm_share": 0.31274767135483816,
+        "mean_minutes": 0.8519852174652948,
+        "pass_rate": 1.0,
+        "per_minute": {
+          "llm": 0.025240833087039633,
+          "stt": 0.010485457690857559,
+          "telephony": 0.019064468528831927,
+          "total": 0.08070670191626085,
+          "tts": 0.025915942609531745
+        },
+        "routing": "talker_thinker",
+        "runs": 30,
+        "turns_routed_to_talker": 0.36363636363636365
+      },
+      {
+        "cache": "auto",
+        "llm_calls": {
+          "talker": 0,
+          "thinker": 482
+        },
+        "llm_share": 0.23397569459550413,
+        "mean_minutes": 0.8320205594433678,
+        "pass_rate": 1.0,
+        "per_minute": {
+          "llm": 0.017252417427765548,
+          "stt": 0.010620212603164286,
+          "telephony": 0.0193094774602987,
+          "total": 0.07373593850246467,
+          "tts": 0.02655383101123613
+        },
+        "routing": "thinker_only",
+        "runs": 30,
+        "turns_routed_to_talker": 0.3614457831325301
+      },
+      {
+        "cache": "always_hit",
+        "llm_calls": {
+          "talker": 0,
+          "thinker": 482
+        },
+        "llm_share": 0.21109877671032773,
+        "mean_minutes": 0.8320205594433678,
+        "pass_rate": 1.0,
+        "per_minute": {
+          "llm": 0.015114189015248665,
+          "stt": 0.010620212603164286,
+          "telephony": 0.0193094774602987,
+          "total": 0.07159771008994778,
+          "tts": 0.02655383101123613
+        },
+        "routing": "thinker_only",
+        "runs": 30,
+        "turns_routed_to_talker": 0.3614457831325301
+      },
+      {
+        "cache": "never",
+        "llm_calls": {
+          "talker": 0,
+          "thinker": 482
+        },
+        "llm_share": 0.3806642543705693,
+        "mean_minutes": 0.8320205594433678,
+        "pass_rate": 1.0,
+        "per_minute": {
+          "llm": 0.0347166421215894,
+          "stt": 0.010620212603164286,
+          "telephony": 0.0193094774602987,
+          "total": 0.09120016319628851,
+          "tts": 0.02655383101123613
+        },
+        "routing": "thinker_only",
+        "runs": 30,
+        "turns_routed_to_talker": 0.3614457831325301
+      }
+    ]
+  },
+  "simulated": true
+}

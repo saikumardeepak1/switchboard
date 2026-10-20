@@ -1,0 +1,267 @@
+{
+  "benchmark": "speculation_latency",
+  "note": "Simulated on a virtual clock. Latencies come from configured provider latency distributions, so they measure the architecture's scheduling, not real providers.",
+  "params": {
+    "n": 40,
+    "personas": [
+      "clean",
+      "slow_speaker"
+    ],
+    "sim_config": {
+      "stt_final_lag_s": "from the persona (clean p50 0.08 p95 0.12, slow p50 0.1 p95 0.2)",
+      "talker_ttft_s": {
+        "p50": 0.15,
+        "p95": 0.3
+      },
+      "thinker_ttft_s": {
+        "p50": 0.35,
+        "p95": 0.8
+      },
+      "tokens_per_s": 60.0,
+      "tts_ttfb_s": "from the bundle voice settings (0.15)"
+    },
+    "thresholds": [
+      0.3,
+      0.4,
+      0.5,
+      0.6,
+      0.7,
+      "off"
+    ]
+  },
+  "platform": "macOS-15.7.3",
+  "python": "3.12.12",
+  "results": {
+    "configs": [
+      {
+        "eager_threshold": 0.3,
+        "endpointing_ms_mean": 495.8932827680539,
+        "llm_calls": 480,
+        "llm_calls_cancelled": 0,
+        "pass_rate": 1.0,
+        "persona": "clean",
+        "runs": 40,
+        "speculations_cancelled": 0,
+        "speculations_started": 200,
+        "turns": 195,
+        "v2v_ms": {
+          "mean": 842.1112292852157,
+          "p50": 775.5661010742188,
+          "p95": 1301.6635179519656
+        },
+        "wasted_output_token_ratio": 0.0,
+        "wasted_speculation_ratio": 0.0
+      },
+      {
+        "eager_threshold": 0.3,
+        "endpointing_ms_mean": 701.9732881475378,
+        "llm_calls": 523,
+        "llm_calls_cancelled": 40,
+        "pass_rate": 1.0,
+        "persona": "slow_speaker",
+        "runs": 40,
+        "speculations_cancelled": 40,
+        "speculations_started": 243,
+        "turns": 183,
+        "v2v_ms": {
+          "mean": 965.1684174772168,
+          "p50": 945.044755935669,
+          "p95": 1412.4540090560915
+        },
+        "wasted_output_token_ratio": 0.0014936519790888724,
+        "wasted_speculation_ratio": 0.1646090534979424
+      },
+      {
+        "eager_threshold": 0.4,
+        "endpointing_ms_mean": 495.8932827680539,
+        "llm_calls": 480,
+        "llm_calls_cancelled": 0,
+        "pass_rate": 1.0,
+        "persona": "clean",
+        "runs": 40,
+        "speculations_cancelled": 0,
+        "speculations_started": 200,
+        "turns": 195,
+        "v2v_ms": {
+          "mean": 842.1112292852157,
+          "p50": 775.5661010742188,
+          "p95": 1301.6635179519656
+        },
+        "wasted_output_token_ratio": 0.0,
+        "wasted_speculation_ratio": 0.0
+      },
+      {
+        "eager_threshold": 0.4,
+        "endpointing_ms_mean": 704.4397106877079,
+        "llm_calls": 508,
+        "llm_calls_cancelled": 26,
+        "pass_rate": 1.0,
+        "persona": "slow_speaker",
+        "runs": 40,
+        "speculations_cancelled": 25,
+        "speculations_started": 228,
+        "turns": 182,
+        "v2v_ms": {
+          "mean": 956.74729347229,
+          "p50": 939.5241737365723,
+          "p95": 1419.2831158638
+        },
+        "wasted_output_token_ratio": 0.0009977550511349464,
+        "wasted_speculation_ratio": 0.10964912280701754
+      },
+      {
+        "eager_threshold": 0.5,
+        "endpointing_ms_mean": 495.8932827680539,
+        "llm_calls": 480,
+        "llm_calls_cancelled": 0,
+        "pass_rate": 1.0,
+        "persona": "clean",
+        "runs": 40,
+        "speculations_cancelled": 0,
+        "speculations_started": 200,
+        "turns": 195,
+        "v2v_ms": {
+          "mean": 842.1112292852157,
+          "p50": 775.5661010742188,
+          "p95": 1301.6635179519656
+        },
+        "wasted_output_token_ratio": 0.0,
+        "wasted_speculation_ratio": 0.0
+      },
+      {
+        "eager_threshold": 0.5,
+        "endpointing_ms_mean": 703.6666718740312,
+        "llm_calls": 494,
+        "llm_calls_cancelled": 12,
+        "pass_rate": 1.0,
+        "persona": "slow_speaker",
+        "runs": 40,
+        "speculations_cancelled": 11,
+        "speculations_started": 214,
+        "turns": 182,
+        "v2v_ms": {
+          "mean": 962.117768905975,
+          "p50": 940.8731460571289,
+          "p95": 1416.0180211067193
+        },
+        "wasted_output_token_ratio": 0.0,
+        "wasted_speculation_ratio": 0.0514018691588785
+      },
+      {
+        "eager_threshold": 0.6,
+        "endpointing_ms_mean": 495.97571483209504,
+        "llm_calls": 480,
+        "llm_calls_cancelled": 0,
+        "pass_rate": 1.0,
+        "persona": "clean",
+        "runs": 40,
+        "speculations_cancelled": 0,
+        "speculations_started": 200,
+        "turns": 199,
+        "v2v_ms": {
+          "mean": 869.5554996854696,
+          "p50": 809.8757266998291,
+          "p95": 1336.6988897323606
+        },
+        "wasted_output_token_ratio": 0.0,
+        "wasted_speculation_ratio": 0.0
+      },
+      {
+        "eager_threshold": 0.6,
+        "endpointing_ms_mean": 706.3998990725977,
+        "llm_calls": 491,
+        "llm_calls_cancelled": 8,
+        "pass_rate": 1.0,
+        "persona": "slow_speaker",
+        "runs": 40,
+        "speculations_cancelled": 8,
+        "speculations_started": 211,
+        "turns": 186,
+        "v2v_ms": {
+          "mean": 1000.8352059189991,
+          "p50": 971.3867902755737,
+          "p95": 1425.717294216156
+        },
+        "wasted_output_token_ratio": 0.0,
+        "wasted_speculation_ratio": 0.037914691943127965
+      },
+      {
+        "eager_threshold": 0.7,
+        "endpointing_ms_mean": 495.9958076477051,
+        "llm_calls": 480,
+        "llm_calls_cancelled": 0,
+        "pass_rate": 1.0,
+        "persona": "clean",
+        "runs": 40,
+        "speculations_cancelled": 0,
+        "speculations_started": 200,
+        "turns": 200,
+        "v2v_ms": {
+          "mean": 981.1345946788788,
+          "p50": 926.9670248031616,
+          "p95": 1455.4576277732851
+        },
+        "wasted_output_token_ratio": 0.0,
+        "wasted_speculation_ratio": 0.0
+      },
+      {
+        "eager_threshold": 0.7,
+        "endpointing_ms_mean": 714.0984370790679,
+        "llm_calls": 486,
+        "llm_calls_cancelled": 4,
+        "pass_rate": 1.0,
+        "persona": "slow_speaker",
+        "runs": 40,
+        "speculations_cancelled": 3,
+        "speculations_started": 206,
+        "turns": 196,
+        "v2v_ms": {
+          "mean": 1125.3391905706756,
+          "p50": 1096.9194173812866,
+          "p95": 1644.1915035247803
+        },
+        "wasted_output_token_ratio": 0.0007485029940119761,
+        "wasted_speculation_ratio": 0.014563106796116505
+      },
+      {
+        "eager_threshold": "off",
+        "endpointing_ms_mean": 495.9958076477051,
+        "llm_calls": 480,
+        "llm_calls_cancelled": 0,
+        "pass_rate": 1.0,
+        "persona": "clean",
+        "runs": 40,
+        "speculations_cancelled": 0,
+        "speculations_started": 0,
+        "turns": 200,
+        "v2v_ms": {
+          "mean": 1105.099995136261,
+          "p50": 1049.3237972259521,
+          "p95": 1575.4575133323672
+        },
+        "wasted_output_token_ratio": 0.0,
+        "wasted_speculation_ratio": null
+      },
+      {
+        "eager_threshold": "off",
+        "endpointing_ms_mean": 714.0984370790679,
+        "llm_calls": 483,
+        "llm_calls_cancelled": 1,
+        "pass_rate": 1.0,
+        "persona": "slow_speaker",
+        "runs": 40,
+        "speculations_cancelled": 0,
+        "speculations_started": 0,
+        "turns": 196,
+        "v2v_ms": {
+          "mean": 1321.741941023846,
+          "p50": 1290.5739545822144,
+          "p95": 1899.1984128952026
+        },
+        "wasted_output_token_ratio": 0.0,
+        "wasted_speculation_ratio": null
+      }
+    ]
+  },
+  "simulated": true
+}

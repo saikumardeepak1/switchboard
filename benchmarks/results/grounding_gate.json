@@ -1,0 +1,109 @@
+{
+  "benchmark": "grounding_gate",
+  "note": "Simulated on a virtual clock. Latencies come from configured provider latency distributions, so they measure the architecture's scheduling, not real providers.",
+  "params": {
+    "mix": {
+      "bridge": 0.42,
+      "eta_clock": 0.08,
+      "eta_minutes": 0.08,
+      "order": 0.12,
+      "pay": 0.12,
+      "refund": 0.1,
+      "relative_eta": 0.03,
+      "spoken_money": 0.03,
+      "spoken_quarter": 0.02
+    },
+    "n": 20000,
+    "p_corrupt": 0.05,
+    "verifier_recall": 0.95
+  },
+  "platform": "macOS-15.7.3",
+  "python": "3.12.12",
+  "results": {
+    "baseline_catch_rate": 0.9423076923076923,
+    "baseline_released_corrupt": 30,
+    "baseline_verifier_calls": 20000,
+    "by_category": {
+      "claimless": {
+        "corrupted": 0,
+        "false_block_rate": 0.0,
+        "false_blocks": 0,
+        "sentences": 8330
+      },
+      "eta_clock": {
+        "corrupted": 76,
+        "false_block_rate": 0.0,
+        "false_blocks": 0,
+        "sentences": 1662
+      },
+      "eta_minutes": {
+        "corrupted": 81,
+        "false_block_rate": 0.0,
+        "false_blocks": 0,
+        "sentences": 1546
+      },
+      "order_id": {
+        "corrupted": 127,
+        "false_block_rate": 0.0,
+        "false_blocks": 0,
+        "sentences": 2434
+      },
+      "paraphrase_clock": {
+        "corrupted": 0,
+        "false_block_rate": 0.0,
+        "false_blocks": 0,
+        "sentences": 385
+      },
+      "paraphrase_money": {
+        "corrupted": 0,
+        "false_block_rate": 0.0,
+        "false_blocks": 0,
+        "sentences": 603
+      },
+      "pay": {
+        "corrupted": 125,
+        "false_block_rate": 0.0,
+        "false_blocks": 0,
+        "sentences": 2377
+      },
+      "refund": {
+        "corrupted": 85,
+        "false_block_rate": 0.0,
+        "false_blocks": 0,
+        "sentences": 2030
+      },
+      "relative_eta": {
+        "corrupted": 26,
+        "false_block_rate": 1.0,
+        "false_blocks": 607,
+        "sentences": 633
+      }
+    },
+    "corrupted": 520,
+    "corruption_rate_of_all_sentences": 0.026,
+    "false_block_rate_clean": 0.031160164271047227,
+    "false_block_rate_clean_with_claims": 0.05443946188340807,
+    "false_blocks_clean": 607,
+    "sentences": 20000,
+    "tier1_catch_rate": 1.0,
+    "tier1_caught": 520,
+    "tier1_latency_us": {
+      "p50": 48.687506932765245,
+      "p99": 196.4211388258257
+    },
+    "tier1_only": {
+      "tier3_share": 0.0,
+      "verifier_calls": 0
+    },
+    "tier1_only_released_corrupt": 0,
+    "verifier_calls_avoided_with_scorer": 0.9149,
+    "with_scorer": {
+      "false_blocks_clean": 6142,
+      "released_corrupt": 0,
+      "scorer_false_blocks": 5535,
+      "tier3_share": 0.0851,
+      "verifier_calls": 1702
+    }
+  },
+  "simulated": true
+}
