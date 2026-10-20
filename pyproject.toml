@@ -51,5 +51,5 @@ select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-packages = ["switchboard"]
+packages = ["switchboard", "examples"]
 mypy_path = "src"
