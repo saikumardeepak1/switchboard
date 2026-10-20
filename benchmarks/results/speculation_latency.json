@@ -34,158 +34,211 @@
   "results": {
     "configs": [
       {
+        "caller_turns": 200,
+        "caller_v2v_ms": {
+          "p50": 776.069164276123,
+          "p95": 1295.4577803611758
+        },
         "eager_threshold": 0.3,
-        "endpointing_ms_mean": 495.8932827680539,
-        "llm_calls": 480,
+        "endpointing_ms_mean": 495.9958076477051,
+        "llm_calls": 485,
         "llm_calls_cancelled": 0,
         "pass_rate": 1.0,
         "persona": "clean",
         "runs": 40,
         "speculations_cancelled": 0,
         "speculations_started": 200,
-        "turns": 195,
+        "turns": 200,
         "v2v_ms": {
-          "mean": 842.1112292852157,
-          "p50": 775.5661010742188,
-          "p95": 1301.6635179519656
+          "mean": 841.7224073410034,
+          "p50": 776.069164276123,
+          "p95": 1295.4577803611758
         },
+        "v2v_source": "turn_timeline",
         "wasted_output_token_ratio": 0.0,
         "wasted_speculation_ratio": 0.0
       },
       {
+        "caller_turns": 196,
+        "caller_v2v_ms": {
+          "p50": 956.5442800521851,
+          "p95": 1362.4558448791504
+        },
         "eager_threshold": 0.3,
-        "endpointing_ms_mean": 701.9732881475378,
-        "llm_calls": 523,
+        "endpointing_ms_mean": 714.0984370790679,
+        "llm_calls": 537,
         "llm_calls_cancelled": 40,
         "pass_rate": 1.0,
         "persona": "slow_speaker",
         "runs": 40,
         "speculations_cancelled": 40,
         "speculations_started": 243,
-        "turns": 183,
+        "turns": 203,
         "v2v_ms": {
-          "mean": 965.1684174772168,
-          "p50": 945.044755935669,
-          "p95": 1412.4540090560915
+          "mean": 970.9286537076453,
+          "p50": 957.8115940093994,
+          "p95": 1372.3833560943604
         },
-        "wasted_output_token_ratio": 0.0014936519790888724,
+        "v2v_source": "turn_timeline",
+        "wasted_output_token_ratio": 0.001453136352627755,
         "wasted_speculation_ratio": 0.1646090534979424
       },
       {
+        "caller_turns": 200,
+        "caller_v2v_ms": {
+          "p50": 776.069164276123,
+          "p95": 1295.4577803611758
+        },
         "eager_threshold": 0.4,
-        "endpointing_ms_mean": 495.8932827680539,
-        "llm_calls": 480,
+        "endpointing_ms_mean": 495.9958076477051,
+        "llm_calls": 485,
         "llm_calls_cancelled": 0,
         "pass_rate": 1.0,
         "persona": "clean",
         "runs": 40,
         "speculations_cancelled": 0,
         "speculations_started": 200,
-        "turns": 195,
+        "turns": 200,
         "v2v_ms": {
-          "mean": 842.1112292852157,
-          "p50": 775.5661010742188,
-          "p95": 1301.6635179519656
+          "mean": 841.7224073410034,
+          "p50": 776.069164276123,
+          "p95": 1295.4577803611758
         },
+        "v2v_source": "turn_timeline",
         "wasted_output_token_ratio": 0.0,
         "wasted_speculation_ratio": 0.0
       },
       {
+        "caller_turns": 196,
+        "caller_v2v_ms": {
+          "p50": 954.0419578552246,
+          "p95": 1417.4067378044128
+        },
         "eager_threshold": 0.4,
-        "endpointing_ms_mean": 704.4397106877079,
-        "llm_calls": 508,
+        "endpointing_ms_mean": 714.0984370790679,
+        "llm_calls": 522,
         "llm_calls_cancelled": 26,
         "pass_rate": 1.0,
         "persona": "slow_speaker",
         "runs": 40,
         "speculations_cancelled": 25,
         "speculations_started": 228,
-        "turns": 182,
+        "turns": 203,
         "v2v_ms": {
-          "mean": 956.74729347229,
-          "p50": 939.5241737365723,
-          "p95": 1419.2831158638
+          "mean": 968.8874770855082,
+          "p50": 955.2769660949707,
+          "p95": 1449.5793342590334
         },
-        "wasted_output_token_ratio": 0.0009977550511349464,
+        "v2v_source": "turn_timeline",
+        "wasted_output_token_ratio": 0.000970638194612958,
         "wasted_speculation_ratio": 0.10964912280701754
       },
       {
+        "caller_turns": 200,
+        "caller_v2v_ms": {
+          "p50": 776.069164276123,
+          "p95": 1295.4577803611758
+        },
         "eager_threshold": 0.5,
-        "endpointing_ms_mean": 495.8932827680539,
-        "llm_calls": 480,
+        "endpointing_ms_mean": 495.9958076477051,
+        "llm_calls": 485,
         "llm_calls_cancelled": 0,
         "pass_rate": 1.0,
         "persona": "clean",
         "runs": 40,
         "speculations_cancelled": 0,
         "speculations_started": 200,
-        "turns": 195,
+        "turns": 200,
         "v2v_ms": {
-          "mean": 842.1112292852157,
-          "p50": 775.5661010742188,
-          "p95": 1301.6635179519656
+          "mean": 841.7224073410034,
+          "p50": 776.069164276123,
+          "p95": 1295.4577803611758
         },
+        "v2v_source": "turn_timeline",
         "wasted_output_token_ratio": 0.0,
         "wasted_speculation_ratio": 0.0
       },
       {
+        "caller_turns": 196,
+        "caller_v2v_ms": {
+          "p50": 954.0419578552246,
+          "p95": 1312.3504519462585
+        },
         "eager_threshold": 0.5,
-        "endpointing_ms_mean": 703.6666718740312,
-        "llm_calls": 494,
+        "endpointing_ms_mean": 714.0984370790679,
+        "llm_calls": 508,
         "llm_calls_cancelled": 12,
         "pass_rate": 1.0,
         "persona": "slow_speaker",
         "runs": 40,
         "speculations_cancelled": 11,
         "speculations_started": 214,
-        "turns": 182,
+        "turns": 203,
         "v2v_ms": {
-          "mean": 962.117768905975,
-          "p50": 940.8731460571289,
-          "p95": 1416.0180211067193
+          "mean": 969.8899508697059,
+          "p50": 955.2769660949707,
+          "p95": 1441.5831327438357
         },
+        "v2v_source": "turn_timeline",
         "wasted_output_token_ratio": 0.0,
         "wasted_speculation_ratio": 0.0514018691588785
       },
       {
+        "caller_turns": 200,
+        "caller_v2v_ms": {
+          "p50": 809.3240261077881,
+          "p95": 1335.457742214203
+        },
         "eager_threshold": 0.6,
-        "endpointing_ms_mean": 495.97571483209504,
-        "llm_calls": 480,
+        "endpointing_ms_mean": 495.9958076477051,
+        "llm_calls": 481,
         "llm_calls_cancelled": 0,
         "pass_rate": 1.0,
         "persona": "clean",
         "runs": 40,
         "speculations_cancelled": 0,
         "speculations_started": 200,
-        "turns": 199,
+        "turns": 200,
         "v2v_ms": {
-          "mean": 869.5554996854696,
-          "p50": 809.8757266998291,
-          "p95": 1336.6988897323606
+          "mean": 869.3904507160187,
+          "p50": 809.3240261077881,
+          "p95": 1335.457742214203
         },
+        "v2v_source": "turn_timeline",
         "wasted_output_token_ratio": 0.0,
         "wasted_speculation_ratio": 0.0
       },
       {
+        "caller_turns": 196,
+        "caller_v2v_ms": {
+          "p50": 972.0554351806641,
+          "p95": 1342.2744870185852
+        },
         "eager_threshold": 0.6,
-        "endpointing_ms_mean": 706.3998990725977,
-        "llm_calls": 491,
+        "endpointing_ms_mean": 714.0984370790679,
+        "llm_calls": 501,
         "llm_calls_cancelled": 8,
         "pass_rate": 1.0,
         "persona": "slow_speaker",
         "runs": 40,
         "speculations_cancelled": 8,
         "speculations_started": 211,
-        "turns": 186,
+        "turns": 203,
         "v2v_ms": {
-          "mean": 1000.8352059189991,
-          "p50": 971.3867902755737,
-          "p95": 1425.717294216156
+          "mean": 1007.1752212317706,
+          "p50": 972.1100330352783,
+          "p95": 1522.9954719543462
         },
+        "v2v_source": "turn_timeline",
         "wasted_output_token_ratio": 0.0,
         "wasted_speculation_ratio": 0.037914691943127965
       },
       {
+        "caller_turns": 200,
+        "caller_v2v_ms": {
+          "p50": 926.9670248031616,
+          "p95": 1455.4576277732851
+        },
         "eager_threshold": 0.7,
         "endpointing_ms_mean": 495.9958076477051,
         "llm_calls": 480,
@@ -201,10 +254,16 @@
           "p50": 926.9670248031616,
           "p95": 1455.4576277732851
         },
+        "v2v_source": "turn_timeline",
         "wasted_output_token_ratio": 0.0,
         "wasted_speculation_ratio": 0.0
       },
       {
+        "caller_turns": 196,
+        "caller_v2v_ms": {
+          "p50": 1096.9194173812866,
+          "p95": 1644.1915035247803
+        },
         "eager_threshold": 0.7,
         "endpointing_ms_mean": 714.0984370790679,
         "llm_calls": 486,
@@ -214,16 +273,22 @@
         "runs": 40,
         "speculations_cancelled": 3,
         "speculations_started": 206,
-        "turns": 196,
+        "turns": 203,
         "v2v_ms": {
-          "mean": 1125.3391905706756,
-          "p50": 1096.9194173812866,
-          "p95": 1644.1915035247803
+          "mean": 1130.7628824205822,
+          "p50": 1096.9924926757812,
+          "p95": 1691.4377212524414
         },
+        "v2v_source": "turn_timeline",
         "wasted_output_token_ratio": 0.0007485029940119761,
         "wasted_speculation_ratio": 0.014563106796116505
       },
       {
+        "caller_turns": 200,
+        "caller_v2v_ms": {
+          "p50": 1049.3237972259521,
+          "p95": 1575.4575133323672
+        },
         "eager_threshold": "off",
         "endpointing_ms_mean": 495.9958076477051,
         "llm_calls": 480,
@@ -239,10 +304,16 @@
           "p50": 1049.3237972259521,
           "p95": 1575.4575133323672
         },
+        "v2v_source": "turn_timeline",
         "wasted_output_token_ratio": 0.0,
         "wasted_speculation_ratio": null
       },
       {
+        "caller_turns": 196,
+        "caller_v2v_ms": {
+          "p50": 1290.5739545822144,
+          "p95": 1899.1984128952026
+        },
         "eager_threshold": "off",
         "endpointing_ms_mean": 714.0984370790679,
         "llm_calls": 483,
@@ -252,12 +323,13 @@
         "runs": 40,
         "speculations_cancelled": 0,
         "speculations_started": 0,
-        "turns": 196,
+        "turns": 203,
         "v2v_ms": {
-          "mean": 1321.741941023846,
-          "p50": 1290.5739545822144,
-          "p95": 1899.1984128952026
+          "mean": 1325.1221837668584,
+          "p50": 1290.9188270568848,
+          "p95": 1935.836100578308
         },
+        "v2v_source": "turn_timeline",
         "wasted_output_token_ratio": 0.0,
         "wasted_speculation_ratio": null
       }
