@@ -1,0 +1,163 @@
+{
+  "benchmark": "multiparty",
+  "note": "Simulated on a virtual clock. Latencies come from configured provider latency distributions, so they measure the architecture's scheduling, not real providers.",
+  "params": {
+    "ks": [
+      1,
+      4,
+      8
+    ],
+    "n_per_task": 32,
+    "personas": {
+      "barge_in_heavy": {
+        "interjection": "Okay, okay.",
+        "interrupt_after_s": 1.5,
+        "name": "barge_in_heavy",
+        "noise": 0.0,
+        "patience_s": 12.0,
+        "pause_p50_s": 0.45,
+        "pause_p95_s": 0.9,
+        "pause_prob": 0.0,
+        "reply_gap_s": 0.2,
+        "retries": 1,
+        "stt_p50_s": 0.08,
+        "stt_p95_s": 0.12,
+        "wer": 0.0,
+        "words_per_s": 2.5
+      },
+      "clean": {
+        "interjection": "Okay, okay.",
+        "interrupt_after_s": null,
+        "name": "clean",
+        "noise": 0.0,
+        "patience_s": 12.0,
+        "pause_p50_s": 0.45,
+        "pause_p95_s": 0.9,
+        "pause_prob": 0.0,
+        "reply_gap_s": 0.4,
+        "retries": 1,
+        "stt_p50_s": 0.08,
+        "stt_p95_s": 0.12,
+        "wer": 0.0,
+        "words_per_s": 2.5
+      },
+      "slow_speaker": {
+        "interjection": "Okay, okay.",
+        "interrupt_after_s": null,
+        "name": "slow_speaker",
+        "noise": 0.0,
+        "patience_s": 12.0,
+        "pause_p50_s": 0.6,
+        "pause_p95_s": 1.2,
+        "pause_prob": 0.12,
+        "reply_gap_s": 0.9,
+        "retries": 1,
+        "stt_p50_s": 0.1,
+        "stt_p95_s": 0.2,
+        "wer": 0.0,
+        "words_per_s": 1.6
+      },
+      "wer_12": {
+        "interjection": "Okay, okay.",
+        "interrupt_after_s": null,
+        "name": "wer_12",
+        "noise": 0.0,
+        "patience_s": 12.0,
+        "pause_p50_s": 0.45,
+        "pause_p95_s": 0.9,
+        "pause_prob": 0.0,
+        "reply_gap_s": 0.4,
+        "retries": 1,
+        "stt_p50_s": 0.08,
+        "stt_p95_s": 0.12,
+        "wer": 0.12,
+        "words_per_s": 2.5
+      },
+      "wer_5": {
+        "interjection": "Okay, okay.",
+        "interrupt_after_s": null,
+        "name": "wer_5",
+        "noise": 0.0,
+        "patience_s": 12.0,
+        "pause_p50_s": 0.45,
+        "pause_p95_s": 0.9,
+        "pause_prob": 0.0,
+        "reply_gap_s": 0.4,
+        "retries": 1,
+        "stt_p50_s": 0.08,
+        "stt_p95_s": 0.12,
+        "wer": 0.05,
+        "words_per_s": 2.5
+      }
+    },
+    "scenarios": [
+      "happy_delivery",
+      "declined_delivery"
+    ]
+  },
+  "platform": "macOS-15.7.3",
+  "python": "3.12.12",
+  "results": {
+    "overall": {
+      "pass^1": 0.9875,
+      "pass^4": 0.9524193548387097,
+      "pass^8": 0.9112903225806452
+    },
+    "personas": {
+      "barge_in_heavy": {
+        "assertion_failures": {},
+        "by_scenario": {
+          "declined_delivery": 1.0,
+          "happy_delivery": 1.0
+        },
+        "pass^1": 1.0,
+        "pass^4": 1.0,
+        "pass^8": 1.0
+      },
+      "clean": {
+        "assertion_failures": {},
+        "by_scenario": {
+          "declined_delivery": 1.0,
+          "happy_delivery": 1.0
+        },
+        "pass^1": 1.0,
+        "pass^4": 1.0,
+        "pass^8": 1.0
+      },
+      "slow_speaker": {
+        "assertion_failures": {},
+        "by_scenario": {
+          "declined_delivery": 1.0,
+          "happy_delivery": 1.0
+        },
+        "pass^1": 1.0,
+        "pass^4": 1.0,
+        "pass^8": 1.0
+      },
+      "wer_12": {
+        "assertion_failures": {
+          "caller_heard(courier, 182.40)": 2,
+          "outcome(unresolved)": 2
+        },
+        "by_scenario": {
+          "declined_delivery": 0.9375,
+          "happy_delivery": 0.9375
+        },
+        "pass^1": 0.9375,
+        "pass^4": 0.7620967741935484,
+        "pass^8": 0.5564516129032258
+      },
+      "wer_5": {
+        "assertion_failures": {},
+        "by_scenario": {
+          "declined_delivery": 1.0,
+          "happy_delivery": 1.0
+        },
+        "pass^1": 1.0,
+        "pass^4": 1.0,
+        "pass^8": 1.0
+      }
+    }
+  },
+  "simulated": true
+}

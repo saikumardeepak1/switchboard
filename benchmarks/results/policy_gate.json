@@ -1,0 +1,82 @@
+{
+  "benchmark": "policy_gate",
+  "note": "Simulated on a virtual clock. Latencies come from configured provider latency distributions, so they measure the architecture's scheduling, not real providers.",
+  "params": {
+    "detector_delay_s": 3.0,
+    "detector_false_positive_rate": 0.0,
+    "detector_recall": 0.95,
+    "n": 1000,
+    "p_repeat": 0.1,
+    "p_violation": 0.25,
+    "scenario": "refund_delivery"
+  },
+  "platform": "macOS-15.7.3",
+  "python": "3.12.12",
+  "results": {
+    "baseline_post_hoc": {
+      "check_latency_ms_modeled": 3000.0,
+      "conversations": 1000,
+      "conversations_passing_all_assertions": 239,
+      "detected_post_hoc": 1348,
+      "detected_post_hoc_by_kind": {
+        "early_mark_delivered": 353,
+        "refund_over_limit": 694,
+        "repeat_write:issue_refund": 39,
+        "repeat_write:mark_delivered": 23,
+        "second_refund": 239
+      },
+      "detector_false_positive_rate": 0.0,
+      "detector_recall": 0.95,
+      "false_block_rate": 0.0,
+      "false_blocks": 0,
+      "false_flags_on_legit": 0,
+      "legit_writes_executed": 1098,
+      "legit_writes_proposed": 1308,
+      "note": "every flag arrives after the action already executed",
+      "violating_executed": 1437,
+      "violating_executed_by_kind": {
+        "early_mark_delivered": 376,
+        "refund_over_limit": 745,
+        "repeat_write:issue_refund": 42,
+        "repeat_write:mark_delivered": 23,
+        "second_refund": 251
+      },
+      "violating_executed_rate": 0.8568872987477638,
+      "violating_proposed": 1677,
+      "violating_proposed_by_kind": {
+        "early_mark_delivered": 391,
+        "refund_over_limit": 746,
+        "repeat_write:issue_refund": 121,
+        "repeat_write:mark_delivered": 144,
+        "second_refund": 275
+      }
+    },
+    "switchboard_pre_execution": {
+      "check_latency_us": {
+        "mean": 11.339152929943056,
+        "p50": 7.959024515002966,
+        "p99": 44.94822409469628,
+        "samples": 7732
+      },
+      "conversations": 1000,
+      "conversations_passing_all_assertions": 863,
+      "false_block_rate": 0.0,
+      "false_blocks": 0,
+      "legit_writes_executed": 2000,
+      "legit_writes_proposed": 2000,
+      "verdict_replay_mismatches": 0,
+      "violating_executed": 0,
+      "violating_executed_by_kind": {},
+      "violating_executed_rate": 0.0,
+      "violating_proposed": 1732,
+      "violating_proposed_by_kind": {
+        "early_mark_delivered": 415,
+        "refund_over_limit": 836,
+        "repeat_write:issue_refund": 89,
+        "repeat_write:mark_delivered": 147,
+        "second_refund": 245
+      }
+    }
+  },
+  "simulated": true
+}

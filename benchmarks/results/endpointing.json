@@ -1,0 +1,103 @@
+{
+  "benchmark": "endpointing",
+  "note": "Simulated on a virtual clock. Latencies come from configured provider latency distributions, so they measure the architecture's scheduling, not real providers.",
+  "params": {
+    "p_pause": 0.7,
+    "templates": 14,
+    "tick_s": 0.02,
+    "turns": 3000
+  },
+  "platform": "macOS-15.7.3",
+  "python": "3.12.12",
+  "results": {
+    "controllers": {
+      "fixed_800ms": {
+        "mean_end_latency_ms": 790.0364101573766,
+        "p50_end_latency_ms": 790.180068755519,
+        "p95_end_latency_ms": 798.8971700959797,
+        "premature_cutoff_rate": 0.14133333333333334,
+        "premature_cutoff_rate_paused_turns": 0.31176470588235294,
+        "turns": 3000,
+        "unterminated": 0
+      },
+      "hybrid": {
+        "mean_end_latency_ms": 755.2830768240431,
+        "p50_end_latency_ms": 780.8188358460875,
+        "p95_end_latency_ms": 995.96937601385,
+        "premature_cutoff_rate": 0.024,
+        "premature_cutoff_rate_paused_turns": 0.052941176470588235,
+        "turns": 3000,
+        "unterminated": 0
+      },
+      "text_only": {
+        "mean_end_latency_ms": 86.74974349070973,
+        "p50_end_latency_ms": 87.80966090467857,
+        "p95_end_latency_ms": 129.76893396634892,
+        "premature_cutoff_rate": 0.043333333333333335,
+        "premature_cutoff_rate_paused_turns": 0.09558823529411764,
+        "turns": 3000,
+        "unterminated": 0
+      }
+    },
+    "noisy_punctuation": {
+      "fixed_800ms": {
+        "mean_end_latency_ms": 790.0364101573766,
+        "p50_end_latency_ms": 790.180068755519,
+        "p95_end_latency_ms": 798.8971700959797,
+        "premature_cutoff_rate": 0.14133333333333334,
+        "premature_cutoff_rate_paused_turns": 0.31176470588235294,
+        "turns": 3000,
+        "unterminated": 0
+      },
+      "hybrid": {
+        "mean_end_latency_ms": 924.2564101573764,
+        "p50_end_latency_ms": 851.0393011373355,
+        "p95_end_latency_ms": 2183.297157912518,
+        "premature_cutoff_rate": 0.050333333333333334,
+        "premature_cutoff_rate_paused_turns": 0.11102941176470588,
+        "turns": 3000,
+        "unterminated": 0
+      },
+      "text_only": {
+        "mean_end_latency_ms": 763.28974349071,
+        "p50_end_latency_ms": 96.69300162687122,
+        "p95_end_latency_ms": 2995.920972379686,
+        "premature_cutoff_rate": 0.11633333333333333,
+        "premature_cutoff_rate_paused_turns": 0.2566176470588235,
+        "turns": 3000,
+        "unterminated": 0
+      }
+    },
+    "punctuated_partials": {
+      "fixed_800ms": {
+        "mean_end_latency_ms": 790.0364101573766,
+        "p50_end_latency_ms": 790.180068755519,
+        "p95_end_latency_ms": 798.8971700959797,
+        "premature_cutoff_rate": 0.14133333333333334,
+        "premature_cutoff_rate_paused_turns": 0.31176470588235294,
+        "turns": 3000,
+        "unterminated": 0
+      },
+      "hybrid": {
+        "mean_end_latency_ms": 755.2830768240431,
+        "p50_end_latency_ms": 780.8188358460875,
+        "p95_end_latency_ms": 995.96937601385,
+        "premature_cutoff_rate": 0.024,
+        "premature_cutoff_rate_paused_turns": 0.052941176470588235,
+        "turns": 3000,
+        "unterminated": 0
+      },
+      "text_only": {
+        "mean_end_latency_ms": 10.036410157376318,
+        "p50_end_latency_ms": 10.180068755517802,
+        "p95_end_latency_ms": 18.897170095980353,
+        "premature_cutoff_rate": 0.043333333333333335,
+        "premature_cutoff_rate_paused_turns": 0.09558823529411764,
+        "turns": 3000,
+        "unterminated": 0
+      }
+    },
+    "turns_with_a_pause": 1360
+  },
+  "simulated": true
+}
