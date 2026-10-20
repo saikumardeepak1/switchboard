@@ -41,6 +41,10 @@ addopts = "-q"
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.format]
+# Code blocks in docs are illustrative signatures, aligned for reading, not runnable code.
+exclude = ["*.md"]
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC"]
 
